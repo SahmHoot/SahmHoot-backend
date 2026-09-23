@@ -4,6 +4,4 @@ spring:
   flyway:
     locations: classpath:db/migration
 
-app:
-  jwt:
-    secret: test-only-secret-at-least-32-characters-long
+# TODO(3): app.jwt.secret (테스트 전용 값)

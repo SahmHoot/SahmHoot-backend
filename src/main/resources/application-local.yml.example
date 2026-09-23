@@ -4,6 +4,4 @@ spring:
   flyway:
     locations: classpath:db/migration,classpath:db/seed
 
-app:
-  jwt:
-    secret: local-only-secret-change-me-at-least-32-characters
+# TODO(3): app.jwt.secret (로컬 전용 값)

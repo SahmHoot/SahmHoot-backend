@@ -50,7 +50,7 @@ GRANT ALL PRIVILEGES ON sahmhoot_test.* TO 'sahmhoot'@'localhost';
 FLUSH PRIVILEGES;
 ```
 
-`sahmhoot`는 개발용, `sahmhoot_test`는 테스트용입니다. 테이블은 앱이 실행될 때 Flyway가 만듭니다.
+`sahmhoot`는 개발용, `sahmhoot_test`는 테스트용입니다. 테이블은 앱이 실행될 때 Flyway가 `src/main/resources/db/migration`의 마이그레이션으로 만듭니다(로컬 시드는 `db/seed`, `local` 프로파일에서만 실행).
 
 ### 2. 로컬 설정 파일 만들기 (처음 한 번)
 
@@ -78,14 +78,3 @@ cp src/main/resources/application-local.yml.example src/main/resources/applicati
 ```
 
 PR을 올리면 CI(`backend-ci`)가 `./gradlew spotlessCheck build`를 실행합니다. 커밋 전에 `spotlessApply`를 한 번 돌려 주세요.
-
-### 로컬 시드 계정
-
-`local` 프로파일로 실행하면 아래 계정과 샘플 문제 세트("샘플: 스택·큐 확인문제", 3문항)가 들어갑니다. **로컬 전용**이며 테스트·운영 DB에는 들어가지 않습니다.
-
-| 이메일 | 이름 | 역할 | 비밀번호 |
-|---|---|---|---|
-| prof@sahmhoot.test | 김교수 | PROFESSOR | sahmhoot1234! |
-| student1@sahmhoot.test | 학생하나 | STUDENT | sahmhoot1234! |
-| student2@sahmhoot.test | 학생둘 | STUDENT | sahmhoot1234! |
-| student3@sahmhoot.test | 학생셋 | STUDENT | sahmhoot1234! |
