@@ -3,8 +3,6 @@
 수업 중 실시간 소통 서비스. 산학협력캡스톤디자인 I (2026-2), 팀 강육김권김.
 점수·순위 없이 수강생 전체의 이해도를 실시간으로 확인하는 퀴즈·익명 채팅·이모지 반응 서비스입니다.
 
-> 현재 초기 설정 단계입니다. 실행 방법은 프로젝트 뼈대가 올라온 뒤 추가됩니다.
-
 ## 기술 스택
 
 | 항목 | 버전 |
@@ -33,4 +31,61 @@
 
 ## 실행 방법
 
-(뼈대 PR에서 추가)
+### 필요한 것
+
+- JDK 21
+- MySQL 9.7 (로컬에서 3306 포트로 실행 중)
+- Gradle은 설치하지 않아도 됩니다(`./gradlew`가 알아서 받음)
+
+### 1. DB와 계정 만들기 (처음 한 번)
+
+`mysql -u root -p`로 접속해 실행합니다. 비밀번호는 각자 정합니다.
+
+```sql
+CREATE DATABASE IF NOT EXISTS sahmhoot CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE DATABASE IF NOT EXISTS sahmhoot_test CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE USER IF NOT EXISTS 'sahmhoot'@'localhost' IDENTIFIED BY '로컬_비밀번호';
+GRANT ALL PRIVILEGES ON sahmhoot.* TO 'sahmhoot'@'localhost';
+GRANT ALL PRIVILEGES ON sahmhoot_test.* TO 'sahmhoot'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+`sahmhoot`는 개발용, `sahmhoot_test`는 테스트용입니다. 테이블은 앱이 실행될 때 Flyway가 만듭니다.
+
+### 2. 로컬 설정 파일 만들기 (처음 한 번)
+
+```bash
+cp src/main/resources/application-local.yml.example src/main/resources/application-local.yml
+```
+
+`application-local.yml`의 `password`를 1번에서 정한 비밀번호로 바꿉니다. 이 파일은 gitignore되어 커밋되지 않습니다.
+
+### 3. 실행
+
+```bash
+./gradlew bootRun
+```
+
+- 서버 상태: http://localhost:8080/api/health → `{"status":"UP"}`
+- API 문서(Swagger): http://localhost:8080/swagger-ui.html
+
+### 테스트 · 포맷
+
+```bash
+./gradlew test           # 테스트 (sahmhoot_test DB 사용)
+./gradlew spotlessApply  # 코드 포맷 자동 정리 (google-java-format)
+./gradlew spotlessCheck  # 포맷 검사만 (CI에서 실행)
+```
+
+PR을 올리면 CI(`backend-ci`)가 `./gradlew spotlessCheck build`를 실행합니다. 커밋 전에 `spotlessApply`를 한 번 돌려 주세요.
+
+### 로컬 시드 계정
+
+`local` 프로파일로 실행하면 아래 계정과 샘플 문제 세트("샘플: 스택·큐 확인문제", 3문항)가 들어갑니다. **로컬 전용**이며 테스트·운영 DB에는 들어가지 않습니다.
+
+| 이메일 | 이름 | 역할 | 비밀번호 |
+|---|---|---|---|
+| prof@sahmhoot.test | 김교수 | PROFESSOR | sahmhoot1234! |
+| student1@sahmhoot.test | 학생하나 | STUDENT | sahmhoot1234! |
+| student2@sahmhoot.test | 학생둘 | STUDENT | sahmhoot1234! |
+| student3@sahmhoot.test | 학생셋 | STUDENT | sahmhoot1234! |

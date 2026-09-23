@@ -1,0 +1,9 @@
+spring:
+  datasource:
+    password: 여기에_로컬_DB_비밀번호
+  flyway:
+    locations: classpath:db/migration,classpath:db/seed
+
+app:
+  jwt:
+    secret: local-only-secret-change-me-at-least-32-characters
