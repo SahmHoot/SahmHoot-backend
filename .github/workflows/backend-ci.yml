@@ -1,0 +1,43 @@
+name: backend-ci
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop]
+
+jobs:
+  # 보호 규칙의 필수 체크 이름이므로 잡 이름(build)을 바꾸지 않는다
+  build:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:9.7
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: sahmhoot_test
+          MYSQL_USER: sahmhoot
+          MYSQL_PASSWORD: test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      DB_PASSWORD: test
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Format check, build and test
+        run: ./gradlew spotlessCheck build

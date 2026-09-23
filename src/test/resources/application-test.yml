@@ -1,0 +1,7 @@
+spring:
+  datasource:
+    url: ${TEST_DB_URL:jdbc:mysql://localhost:3306/sahmhoot_test?characterEncoding=UTF-8&connectionTimeZone=UTC}
+  flyway:
+    locations: classpath:db/migration
+
+# TODO(3): app.jwt.secret (테스트 전용 값)

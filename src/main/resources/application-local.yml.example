@@ -1,0 +1,7 @@
+spring:
+  datasource:
+    password: 여기에_로컬_DB_비밀번호
+  flyway:
+    locations: classpath:db/migration,classpath:db/seed
+
+# TODO(3): app.jwt.secret (로컬 전용 값)
