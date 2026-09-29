@@ -8,7 +8,7 @@
 | 항목 | 버전 |
 |---|---|
 | Java | 21 |
-| Spring Boot | 4.1.x |
+| Spring Boot | 4.1.1 |
 | 빌드 | Gradle (wrapper 포함, 별도 설치 불필요) |
 | DB | MySQL 8.4 LTS (Docker), Flyway |
 | 실시간 | WebSocket + STOMP |
@@ -16,6 +16,7 @@
 ## 관련 링크
 
 - 프론트엔드 레포: https://github.com/SahmHoot/SahmHoot-frontend
+- DB 레포(로컬 DB 실행 설정·ERD): https://github.com/SahmHoot/db-schema
 - 설계 문서(노션): https://app.notion.com/p/3e1136463d9381cc9790e16a2dd637bd
 - 개발 환경·컨벤션: https://app.notion.com/p/3e4136463d938199a3e2f8cf7e4547d5
 - 와이어프레임(Figma): https://www.figma.com/design/SUp5dpVNfMF96iK3Vd1nuv
@@ -25,7 +26,8 @@
 - 이슈는 이 레포(백엔드)에 모읍니다. 프론트 작업도 여기 이슈를 만듭니다.
 - 브랜치: `main`(배포본) / `develop`(기본) / `feature/{이슈번호}-{영문}` / `fix/{이슈번호}-{영문}`
 - 같은 이슈 작업은 두 레포에 같은 브랜치 이름을 씁니다.
-- `main`·`develop` 직접 push 금지, PR 필수. 승인은 권장이고, 공통 영역(`common/`, 보안·WebSocket 설정, 마이그레이션, 빌드 설정) 변경은 1명 확인 후 머지. feature → develop은 Squash merge.
+- `main`·`develop` 직접 push 금지, PR 필수. 승인은 권장이고, 공통 영역(`common/`, 보안·WebSocket 설정, 마이그레이션, `build.gradle`, `package.json`) 변경은 1명 확인 후 머지. feature → develop은 Squash merge.
+- 기능 하나 = 백엔드 PR + 프론트 PR. 백엔드를 먼저 머지합니다.
 - 커밋: `feat: 수업 방 생성 API 추가 (#12)` (feat / fix / refactor / chore / docs / test / style)
 - 자세한 규칙은 노션 07 개발 환경·컨벤션을 봅니다.
 
