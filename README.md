@@ -10,7 +10,7 @@
 | Java | 21 |
 | Spring Boot | 4.1.x |
 | 빌드 | Gradle (wrapper 포함, 별도 설치 불필요) |
-| DB | MySQL 9.7 LTS, Flyway |
+| DB | MySQL 8.4 LTS (Docker), Flyway |
 | 실시간 | WebSocket + STOMP |
 
 ## 관련 링크
@@ -34,23 +34,28 @@
 ### 필요한 것
 
 - JDK 21
-- MySQL 9.7 (로컬에서 3306 포트로 실행 중)
+- Docker (Docker Desktop 또는 colima). DB는 DB 레포의 Docker 설정으로 띄웁니다
 - Gradle은 설치하지 않아도 됩니다(`./gradlew`가 알아서 받음)
 
-### 1. DB와 계정 만들기 (처음 한 번)
+### 1. DB 실행 (처음 한 번)
 
-`mysql -u root -p`로 접속해 실행합니다. 비밀번호는 각자 정합니다.
+DB는 DB 레포 [SahmHoot/db-schema](https://github.com/SahmHoot/db-schema)의 Docker 설정으로 띄웁니다(MySQL 8.4, DB `sahmhoot`, 계정 `sahmhoot_user`, 포트 3306). PC에 따로 설치한 MySQL이 켜져 있으면 3306 포트가 겹치니 먼저 꺼 주세요.
 
-```sql
-CREATE DATABASE IF NOT EXISTS sahmhoot CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
-CREATE DATABASE IF NOT EXISTS sahmhoot_test CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
-CREATE USER IF NOT EXISTS 'sahmhoot'@'localhost' IDENTIFIED BY '로컬_비밀번호';
-GRANT ALL PRIVILEGES ON sahmhoot.* TO 'sahmhoot'@'localhost';
-GRANT ALL PRIVILEGES ON sahmhoot_test.* TO 'sahmhoot'@'localhost';
-FLUSH PRIVILEGES;
+```bash
+# 백엔드 레포와 같은 폴더에서
+gh repo clone SahmHoot/db-schema
+cd db-schema
+docker compose -f docker.yml up -d
+docker compose -f docker.yml ps   # sahmhoot-mysql이 healthy면 준비 완료
 ```
 
-`sahmhoot`는 개발용, `sahmhoot_test`는 테스트용입니다. 테이블은 앱이 실행될 때 Flyway가 `src/main/resources/db/migration`의 마이그레이션으로 만듭니다(로컬 시드는 `db/seed`, `local` 프로파일에서만 실행).
+- `sahmhoot`는 개발용, `sahmhoot_test`는 테스트용입니다. `sahmhoot_test`는 DB 레포의 `mysql/init`이 컨테이너를 처음 만들 때 자동으로 만듭니다.
+- 테스트에서 `Unknown database 'sahmhoot_test'` 오류가 나면(DB 레포에 설정이 반영되기 전에 컨테이너를 만든 경우) 아래를 한 번 실행합니다. root 비밀번호는 `docker.yml`의 `MYSQL_ROOT_PASSWORD`입니다.
+  ```bash
+  docker exec -it sahmhoot-mysql mysql -uroot -p -e "CREATE DATABASE IF NOT EXISTS sahmhoot_test CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; GRANT ALL PRIVILEGES ON sahmhoot_test.* TO 'sahmhoot_user'@'%';"
+  ```
+- 테이블은 앱과 테스트가 실행될 때 Flyway가 `src/main/resources/db/migration`의 마이그레이션으로 만듭니다(로컬 시드는 `db/seed`, `local` 프로파일에서만 실행).
+- 끄기 `docker compose -f docker.yml stop`, 완전 초기화(데이터 삭제) `docker compose -f docker.yml down -v`
 
 ### 2. 로컬 설정 파일 만들기 (처음 한 번)
 
@@ -58,7 +63,7 @@ FLUSH PRIVILEGES;
 cp src/main/resources/application-local.yml.example src/main/resources/application-local.yml
 ```
 
-`application-local.yml`의 `password`를 1번에서 정한 비밀번호로 바꿉니다. 이 파일은 gitignore되어 커밋되지 않습니다.
+`application-local.yml`의 `password`를 DB 레포 `docker.yml`의 `MYSQL_PASSWORD` 값으로 바꿉니다. 이 파일은 gitignore되어 커밋되지 않습니다.
 
 ### 3. 실행
 

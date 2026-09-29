@@ -13,11 +13,11 @@ jobs:
 
     services:
       mysql:
-        image: mysql:9.7
+        image: mysql:8.4
         env:
           MYSQL_ROOT_PASSWORD: root
           MYSQL_DATABASE: sahmhoot_test
-          MYSQL_USER: sahmhoot
+          MYSQL_USER: sahmhoot_user
           MYSQL_PASSWORD: test
         ports:
           - 3306:3306
