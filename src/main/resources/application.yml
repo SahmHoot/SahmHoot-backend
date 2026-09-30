@@ -6,7 +6,7 @@ spring:
   datasource:
     url: ${DB_URL:jdbc:mysql://localhost:3306/sahmhoot?characterEncoding=UTF-8&connectionTimeZone=UTC}
     username: ${DB_USERNAME:sahmhoot_user}
-    password: ${DB_PASSWORD:}
+    password: ${DB_PASSWORD:sahmhoot1!}
   jpa:
     open-in-view: false
     hibernate:
