@@ -1,7 +1,7 @@
 # 삼훗(SahmHoot) — 백엔드
 
-수업 중 실시간 소통 서비스. 산학협력캡스톤디자인 I (2026-2), 팀 강육김권김.
-점수·순위 없이 수강생 전체의 이해도를 실시간으로 확인하는 퀴즈·익명 채팅·이모지 반응 서비스입니다.
+수업 중 실시간 소통 서비스를 위한 백엔드입니다. 산학협력캡스톤디자인 I (2026-2), 팀 강육김권김.
+현재는 팀원들의 기능 개발을 시작하기 위한 최소 Backend Skeleton을 제공합니다.
 
 ## 기술 스택
 
@@ -11,7 +11,23 @@
 | Spring Boot | 4.1.1 |
 | 빌드 | Gradle (wrapper 포함, 별도 설치 불필요) |
 | DB | MySQL 8.4 LTS (Docker), Flyway |
-| 실시간 | WebSocket + STOMP |
+| 현재 범위 | 애플리케이션 기동 및 Health API |
+
+## 현재 구현 범위
+
+- `SahmhootApplication`
+- `HealthController` (`GET /api/health`)
+- 개발 초기용 최소 `SecurityConfig` (`/api/**` 인증 없이 허용)
+- 기본 Application Test 및 HealthController Test
+
+다음 기능은 아직 구현하지 않았습니다.
+
+- JWT, 회원가입, 로그인
+- Entity 및 도메인 API
+- Room, QuestionSet, Quiz, Answer API
+- 실제 WebSocket/STOMP 연결
+- Redis 연결
+- GlobalExceptionHandler, Scheduler, Swagger/OpenAPI, Mail
 
 ## 관련 링크
 
@@ -56,7 +72,7 @@ docker compose -f docker.yml ps   # sahmhoot-mysql이 healthy면 준비 완료
   ```bash
   docker exec -it sahmhoot-mysql mysql -uroot -p -e "CREATE DATABASE IF NOT EXISTS sahmhoot_test CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; GRANT ALL PRIVILEGES ON sahmhoot_test.* TO 'sahmhoot_user'@'%';"
   ```
-- 테이블은 앱과 테스트가 실행될 때 Flyway가 `src/main/resources/db/migration`의 마이그레이션으로 만듭니다(로컬 시드는 `db/seed`, `local` 프로파일에서만 실행).
+- 현재 `src/main/resources/db/migration`에는 마이그레이션이 없습니다. 데이터베이스 연결 및 빈 스키마에서 애플리케이션 기동만 확인합니다.
 - 끄기 `docker compose -f docker.yml stop`, 완전 초기화(데이터 삭제) `docker compose -f docker.yml down -v`
 
 ### 2. 로컬 설정 파일 만들기 (처음 한 번)
@@ -74,14 +90,9 @@ cp src/main/resources/application-local.yml.example src/main/resources/applicati
 ```
 
 - 서버 상태: http://localhost:8080/api/health → `{"status":"UP"}`
-- API 문서(Swagger): http://localhost:8080/swagger-ui.html
 
-### 테스트 · 포맷
+### 테스트
 
 ```bash
 ./gradlew test           # 테스트 (sahmhoot_test DB 사용)
-./gradlew spotlessApply  # 코드 포맷 자동 정리 (google-java-format)
-./gradlew spotlessCheck  # 포맷 검사만 (CI에서 실행)
 ```
-
-PR을 올리면 CI(`backend-ci`)가 `./gradlew spotlessCheck build`를 실행합니다. 커밋 전에 `spotlessApply`를 한 번 돌려 주세요.
