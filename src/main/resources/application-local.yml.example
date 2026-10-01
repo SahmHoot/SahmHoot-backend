@@ -1,0 +1,3 @@
+spring:
+  datasource:
+    password: 여기에_로컬_DB_비밀번호
