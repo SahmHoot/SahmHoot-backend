@@ -73,7 +73,7 @@ class QuizCoreServiceTest {
   }
 
   @Test
-  @DisplayName("closeQuestion은 마지막 문항인 경우 finishQuiz를 3초 뒤 예약할 수 있도록 처리한다")
+  @DisplayName("closeQuestion은 방 잠금 안에서 QuizCoreTxService.closeQuestion을 호출한다")
   void closeQuestion_lastQuestion_delegatesToTxService() {
     Long roomId = 42L;
     Long runQuestionId = 812L;
