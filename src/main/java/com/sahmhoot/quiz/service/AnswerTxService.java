@@ -62,27 +62,7 @@ public class AnswerTxService {
     RunChoice choice = runChoiceRepository.findByIdAndRunQuestionId(request.choiceId(), question.getId())
         .orElseThrow(() -> new BusinessException(ErrorCode.VALIDATION_FAILED, "해당 문항의 선택지가 아닙니다."));
 
-    Optional<Answer> existingAnswer = answerRepository.findByRunQuestionIdAndParticipantId(
-        question.getId(),
-        participantId
-    );
-
-    if (existingAnswer.isPresent()) {
-      Answer answer = existingAnswer.get();
-      answer.updateChoice(choice, now);
-      answerRepository.save(answer);
-      log.info("Updated answer: participantId={}, runQuestionId={}, choiceId={}", participantId, question.getId(), choice.getId());
-    } else {
-      Answer newAnswer = Answer.builder()
-          .runQuestion(question)
-          .participantId(participantId)
-          .runChoice(choice)
-          .submittedAt(now)
-          .updatedAt(now)
-          .build();
-      answerRepository.save(newAnswer);
-      log.info("Saved new answer: participantId={}, runQuestionId={}, choiceId={}", participantId, question.getId(), choice.getId());
-    }
+    saveOrUpdateAnswer(question, participantId, choice, now);
 
     long answeredCount = answerRepository.countByRunQuestionId(question.getId());
 
@@ -100,5 +80,29 @@ public class AnswerTxService {
   @Transactional(readOnly = true)
   public long countAnswered(Long runQuestionId) {
     return answerRepository.countByRunQuestionId(runQuestionId);
+  }
+
+  private void saveOrUpdateAnswer(RunQuestion question, Long participantId, RunChoice choice, Instant now) {
+    Optional<Answer> existingAnswer = answerRepository.findByRunQuestionIdAndParticipantId(
+        question.getId(), participantId);
+    if (existingAnswer.isPresent()) {
+      Answer answer = existingAnswer.get();
+      answer.updateChoice(choice, now);
+      answerRepository.save(answer);
+      log.info("Updated answer: participantId={}, runQuestionId={}, choiceId={}",
+          participantId, question.getId(), choice.getId());
+      return;
+    }
+
+    Answer newAnswer = Answer.builder()
+        .runQuestion(question)
+        .participantId(participantId)
+        .runChoice(choice)
+        .submittedAt(now)
+        .updatedAt(now)
+        .build();
+    answerRepository.save(newAnswer);
+    log.info("Saved new answer: participantId={}, runQuestionId={}, choiceId={}",
+        participantId, question.getId(), choice.getId());
   }
 }

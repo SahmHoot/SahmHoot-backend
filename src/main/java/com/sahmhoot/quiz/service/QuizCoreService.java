@@ -41,7 +41,6 @@ public class QuizCoreService {
       quizCoreTxService.abortQuiz(roomId, runId, hostUserId);
       // TODO: 실시간 QUIZ_CANCELED 메시지 발행
       // TODO: 해당 방의 스케줄러 예약 작업 취소
-      return null;
     });
   }
 
@@ -52,7 +51,6 @@ public class QuizCoreService {
     roomLockManager.executeWithLock(roomId, () -> {
       quizCoreTxService.closeResult(roomId, hostUserId);
       // TODO: 실시간 ROOM_WAITING 메시지 발행
-      return null;
     });
   }
 
@@ -63,17 +61,12 @@ public class QuizCoreService {
   public void closeQuestion(Long roomId, Long runQuestionId) {
     roomLockManager.executeWithLock(roomId, () -> {
       CloseQuestionResult result = quizCoreTxService.closeQuestion(roomId, runQuestionId);
-      if (result.processed()) {
-        // TODO: 실시간 QUESTION_CLOSED 메시지 발행 (correctChoiceId = result.correctChoiceId(), isLast = result.isLast(), nextOpensAt = result.nextOpensAt())
-        if (result.isLast()) {
-          // TODO(스케줄러 연동): 3초 뒤 finishQuiz(roomId, result.runId()) 호출 예약
-          log.info("Scheduled finishQuiz after 3s for runId={}", result.runId());
-        } else {
-          // TODO(스케줄러 연동): 3초 뒤 다음 문항 openQuestion(roomId, result.runId(), result.nextOrderNo()) 호출 예약
-          log.info("Scheduled next question (orderNo={}) after 3s for runId={}", result.nextOrderNo(), result.runId());
-        }
+      if (!result.processed()) {
+        return;
       }
-      return null;
+
+      // TODO: 실시간 QUESTION_CLOSED 메시지 발행 (correctChoiceId, isLast, nextOpensAt)
+      // TODO: 3초 뒤 마지막 문항이면 finishQuiz, 아니면 다음 문항 openQuestion 예약
     });
   }
 
@@ -100,7 +93,6 @@ public class QuizCoreService {
       quizCoreTxService.openQuestion(roomId, runId, orderNo);
       // TODO: 실시간 QUESTION_OPENED 메시지 발행
       // TODO: 문항 마감 예약 등록 (closesAt + 1s)
-      return null;
     });
   }
 }

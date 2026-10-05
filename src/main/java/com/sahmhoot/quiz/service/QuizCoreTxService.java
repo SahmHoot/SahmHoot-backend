@@ -88,8 +88,9 @@ public class QuizCoreTxService {
 
     RunQuestion firstQuestion = questions.getFirst();
     Long firstRunQuestionId = firstQuestion.getId();
-    Instant closesAt = now.plus(Duration.ofSeconds(firstQuestion.getTimeLimitSeconds()));
-    firstQuestion.open(now, closesAt);
+    Instant openedAt = Instant.now();
+    Instant closesAt = openedAt.plus(Duration.ofSeconds(firstQuestion.getTimeLimitSeconds()));
+    firstQuestion.open(openedAt, closesAt);
     runQuestionRepository.save(firstQuestion);
 
     log.info("Started quiz runId={} for roomId={}, totalQuestions={}", quizRun.getId(), roomId, questions.size());
@@ -188,8 +189,11 @@ public class QuizCoreTxService {
         break;
       }
     }
+    if (currentIndex < 0) {
+      throw new IllegalStateException("Closed question is missing from its quiz run: " + question.getId());
+    }
     boolean isLast = (currentIndex == allQuestions.size() - 1);
-    Integer nextOrderNo = (!isLast && currentIndex != -1 && currentIndex + 1 < allQuestions.size())
+    Integer nextOrderNo = !isLast
         ? allQuestions.get(currentIndex + 1).getOrderNo()
         : null;
 
@@ -249,12 +253,14 @@ public class QuizCoreTxService {
     RunQuestion question = runQuestionRepository.findByQuizRunIdAndOrderNo(runId, orderNo)
         .orElseThrow(() -> new BusinessException(ErrorCode.QUESTION_NOT_FOUND));
 
-    if (question.getStatus() == RunQuestionStatus.READY) {
-      Instant now = Instant.now();
-      Instant closesAt = now.plus(Duration.ofSeconds(question.getTimeLimitSeconds()));
-      question.open(now, closesAt);
-      runQuestionRepository.save(question);
-      log.info("Opened runQuestionId={} (orderNo={}) until {}", question.getId(), orderNo, closesAt);
+    if (!question.isReady()) {
+      return;
     }
+
+    Instant now = Instant.now();
+    Instant closesAt = now.plus(Duration.ofSeconds(question.getTimeLimitSeconds()));
+    question.open(now, closesAt);
+    runQuestionRepository.save(question);
+    log.info("Opened runQuestionId={} (orderNo={}) until {}", question.getId(), orderNo, closesAt);
   }
 }
