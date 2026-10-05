@@ -12,8 +12,6 @@ public interface QuizRunRepository extends JpaRepository<QuizRun, Long> {
 
   Optional<QuizRun> findByIdAndRoomId(Long id, Long roomId);
 
-  Optional<QuizRun> findFirstByRoomIdAndStatus(Long roomId, QuizRunStatus status);
-
   Optional<QuizRun> findTopByRoomIdOrderByIdDesc(Long roomId);
 
   boolean existsByRoomIdAndStatus(Long roomId, QuizRunStatus status);

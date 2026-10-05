@@ -16,8 +16,6 @@ public interface RunChoiceRepository extends JpaRepository<RunChoice, Long> {
 
   Optional<RunChoice> findByIdAndRunQuestionId(Long id, Long runQuestionId);
 
-  List<RunChoice> findByRunQuestion_QuizRun_Id(Long quizRunId);
-
   @Query("SELECT rc FROM RunChoice rc JOIN FETCH rc.runQuestion rq WHERE rq.quizRun.id = :quizRunId ORDER BY rq.orderNo ASC, rc.orderNo ASC")
   List<RunChoice> findByQuizRunIdWithRunQuestion(@Param("quizRunId") Long quizRunId);
 }

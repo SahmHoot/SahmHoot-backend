@@ -2,10 +2,16 @@ package com.sahmhoot.quiz.service.port;
 
 import com.sahmhoot.quiz.exception.BusinessException;
 import com.sahmhoot.quiz.exception.ErrorCode;
+import java.sql.PreparedStatement;
+import java.sql.Statement;
+import java.util.List;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.support.GeneratedKeyHolder;
+import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Component;
 
 /**
@@ -40,7 +46,7 @@ public class JdbcQuestionSetPort implements QuestionSetPort {
   @Override
   public int copyQuestionsToQuizRun(Long questionSetId, Long quizRunId) {
     String questionSql = "SELECT id, type, content, time_limit_seconds, order_no FROM questions WHERE question_set_id = ? ORDER BY order_no ASC";
-    java.util.List<java.util.Map<String, Object>> questions = jdbcTemplate.queryForList(questionSql, questionSetId);
+    List<Map<String, Object>> questions = jdbcTemplate.queryForList(questionSql, questionSetId);
     if (questions.isEmpty()) {
       return 0;
     }
@@ -49,16 +55,16 @@ public class JdbcQuestionSetPort implements QuestionSetPort {
     String choiceSql = "SELECT content, order_no, is_correct FROM choices WHERE question_id = ? ORDER BY order_no ASC";
     String insertRunChoiceSql = "INSERT INTO run_choices (run_question_id, content, order_no, is_correct) VALUES (?, ?, ?, ?)";
 
-    for (java.util.Map<String, Object> q : questions) {
+    for (Map<String, Object> q : questions) {
       Long originalQuestionId = ((Number) q.get("id")).longValue();
       String type = (String) q.get("type");
       String content = (String) q.get("content");
       int timeLimitSeconds = ((Number) q.get("time_limit_seconds")).intValue();
       int orderNo = ((Number) q.get("order_no")).intValue();
 
-      org.springframework.jdbc.support.KeyHolder keyHolder = new org.springframework.jdbc.support.GeneratedKeyHolder();
+      KeyHolder keyHolder = new GeneratedKeyHolder();
       jdbcTemplate.update(connection -> {
-        java.sql.PreparedStatement ps = connection.prepareStatement(insertRunQuestionSql, java.sql.Statement.RETURN_GENERATED_KEYS);
+        PreparedStatement ps = connection.prepareStatement(insertRunQuestionSql, Statement.RETURN_GENERATED_KEYS);
         ps.setLong(1, quizRunId);
         ps.setString(2, type);
         ps.setString(3, content);
@@ -67,13 +73,14 @@ public class JdbcQuestionSetPort implements QuestionSetPort {
         return ps;
       }, keyHolder);
 
-      Long runQuestionId = keyHolder.getKey() != null ? keyHolder.getKey().longValue() : null;
-      if (runQuestionId == null) {
-        continue;
+      Number generatedKey = keyHolder.getKey();
+      if (generatedKey == null) {
+        throw new IllegalStateException("run_questions insert did not return a generated id");
       }
+      Long runQuestionId = generatedKey.longValue();
 
-      java.util.List<java.util.Map<String, Object>> choices = jdbcTemplate.queryForList(choiceSql, originalQuestionId);
-      for (java.util.Map<String, Object> c : choices) {
+      List<Map<String, Object>> choices = jdbcTemplate.queryForList(choiceSql, originalQuestionId);
+      for (Map<String, Object> c : choices) {
         String choiceContent = (String) c.get("content");
         int choiceOrderNo = ((Number) c.get("order_no")).intValue();
         Object isCorrectVal = c.get("is_correct");
