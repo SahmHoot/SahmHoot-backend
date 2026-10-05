@@ -23,6 +23,14 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class JdbcQuestionSetPort implements QuestionSetPort {
 
+  private static final String INSERT_RUN_QUESTION_SQL =
+      "INSERT INTO run_questions (quiz_run_id, type, content, time_limit_seconds, order_no, status) "
+          + "VALUES (?, ?, ?, ?, ?, 'READY')";
+  private static final String SELECT_CHOICES_SQL =
+      "SELECT content, order_no, is_correct FROM choices WHERE question_id = ? ORDER BY order_no ASC";
+  private static final String INSERT_RUN_CHOICE_SQL =
+      "INSERT INTO run_choices (run_question_id, content, order_no, is_correct) VALUES (?, ?, ?, ?)";
+
   private final JdbcTemplate jdbcTemplate;
 
   @Override
@@ -51,45 +59,49 @@ public class JdbcQuestionSetPort implements QuestionSetPort {
       return 0;
     }
 
-    String insertRunQuestionSql = "INSERT INTO run_questions (quiz_run_id, type, content, time_limit_seconds, order_no, status) VALUES (?, ?, ?, ?, ?, 'READY')";
-    String choiceSql = "SELECT content, order_no, is_correct FROM choices WHERE question_id = ? ORDER BY order_no ASC";
-    String insertRunChoiceSql = "INSERT INTO run_choices (run_question_id, content, order_no, is_correct) VALUES (?, ?, ?, ?)";
-
-    for (Map<String, Object> q : questions) {
-      Long originalQuestionId = ((Number) q.get("id")).longValue();
-      String type = (String) q.get("type");
-      String content = (String) q.get("content");
-      int timeLimitSeconds = ((Number) q.get("time_limit_seconds")).intValue();
-      int orderNo = ((Number) q.get("order_no")).intValue();
-
-      KeyHolder keyHolder = new GeneratedKeyHolder();
-      jdbcTemplate.update(connection -> {
-        PreparedStatement ps = connection.prepareStatement(insertRunQuestionSql, Statement.RETURN_GENERATED_KEYS);
-        ps.setLong(1, quizRunId);
-        ps.setString(2, type);
-        ps.setString(3, content);
-        ps.setInt(4, timeLimitSeconds);
-        ps.setInt(5, orderNo);
-        return ps;
-      }, keyHolder);
-
-      Number generatedKey = keyHolder.getKey();
-      if (generatedKey == null) {
-        throw new IllegalStateException("run_questions insert did not return a generated id");
-      }
-      Long runQuestionId = generatedKey.longValue();
-
-      List<Map<String, Object>> choices = jdbcTemplate.queryForList(choiceSql, originalQuestionId);
-      for (Map<String, Object> c : choices) {
-        String choiceContent = (String) c.get("content");
-        int choiceOrderNo = ((Number) c.get("order_no")).intValue();
-        Object isCorrectVal = c.get("is_correct");
-        boolean isCorrect = (isCorrectVal instanceof Boolean b) ? b : (isCorrectVal instanceof Number n && n.intValue() == 1);
-        jdbcTemplate.update(insertRunChoiceSql, runQuestionId, choiceContent, choiceOrderNo, isCorrect);
-      }
+    for (Map<String, Object> questionRow : questions) {
+      Long runQuestionId = insertRunQuestion(quizRunId, questionRow);
+      Long originalQuestionId = ((Number) questionRow.get("id")).longValue();
+      copyChoices(originalQuestionId, runQuestionId);
     }
 
     log.info("Copied {} questions with choices for quizRunId={} from questionSetId={}", questions.size(), quizRunId, questionSetId);
     return questions.size();
+  }
+
+  private Long insertRunQuestion(Long quizRunId, Map<String, Object> questionRow) {
+    KeyHolder keyHolder = new GeneratedKeyHolder();
+    jdbcTemplate.update(connection -> {
+      PreparedStatement statement = connection.prepareStatement(INSERT_RUN_QUESTION_SQL, Statement.RETURN_GENERATED_KEYS);
+      statement.setLong(1, quizRunId);
+      statement.setString(2, (String) questionRow.get("type"));
+      statement.setString(3, (String) questionRow.get("content"));
+      statement.setInt(4, ((Number) questionRow.get("time_limit_seconds")).intValue());
+      statement.setInt(5, ((Number) questionRow.get("order_no")).intValue());
+      return statement;
+    }, keyHolder);
+
+    Number generatedKey = keyHolder.getKey();
+    if (generatedKey == null) {
+      throw new IllegalStateException("run_questions insert did not return a generated id");
+    }
+    return generatedKey.longValue();
+  }
+
+  private void copyChoices(Long originalQuestionId, Long runQuestionId) {
+    List<Map<String, Object>> choices = jdbcTemplate.queryForList(SELECT_CHOICES_SQL, originalQuestionId);
+    for (Map<String, Object> choiceRow : choices) {
+      Object isCorrectValue = choiceRow.get("is_correct");
+      boolean isCorrect = isCorrectValue instanceof Boolean bool
+          ? bool
+          : isCorrectValue instanceof Number number && number.intValue() == 1;
+      jdbcTemplate.update(
+          INSERT_RUN_CHOICE_SQL,
+          runQuestionId,
+          (String) choiceRow.get("content"),
+          ((Number) choiceRow.get("order_no")).intValue(),
+          isCorrect
+      );
+    }
   }
 }

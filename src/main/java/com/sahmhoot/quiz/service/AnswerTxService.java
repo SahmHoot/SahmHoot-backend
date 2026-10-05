@@ -44,20 +44,8 @@ public class AnswerTxService {
     RunQuestion question = runQuestionRepository.findById(request.runQuestionId())
         .orElseThrow(() -> new BusinessException(ErrorCode.QUESTION_NOT_FOUND));
 
-    if (!question.getQuizRun().getRoomId().equals(roomId)) {
-      throw new BusinessException(ErrorCode.QUESTION_NOT_FOUND);
-    }
-
-    if (!question.getQuizRun().isRunning()) {
-      throw new BusinessException(ErrorCode.QUESTION_CLOSED);
-    }
-
     Instant now = Instant.now();
-    // 06 규격 5절: 허용 조건 = closed_at 없음 AND 서버 시각 <= closes_at + 1초
-    Instant maxAllowed = question.getClosesAt() != null ? question.getClosesAt().plusSeconds(1) : now;
-    if (!question.isOpen() || question.getClosedAt() != null || now.isAfter(maxAllowed)) {
-      throw new BusinessException(ErrorCode.QUESTION_CLOSED);
-    }
+    validateAnswerWindow(question, roomId, now);
 
     RunChoice choice = runChoiceRepository.findByIdAndRunQuestionId(request.choiceId(), question.getId())
         .orElseThrow(() -> new BusinessException(ErrorCode.VALIDATION_FAILED, "해당 문항의 선택지가 아닙니다."));
@@ -65,14 +53,7 @@ public class AnswerTxService {
     saveOrUpdateAnswer(question, participantId, choice, now);
 
     long answeredCount = answerRepository.countByRunQuestionId(question.getId());
-
-    // 전체 답변 수에는 이미 접속을 끊은 참가자도 들어갈 수 있으므로 접속 중인 참가자의 답만 센다.
-    boolean shouldClose = false;
-    if (!onlineParticipantIds.isEmpty()) {
-      long onlineAnsweredCount = answerRepository.countByRunQuestionIdAndParticipantIdIn(
-          question.getId(), onlineParticipantIds);
-      shouldClose = onlineAnsweredCount == onlineParticipantIds.size();
-    }
+    boolean shouldClose = hasEveryOnlineParticipantAnswered(question.getId(), onlineParticipantIds);
 
     return new SubmitAnswerTxResult(question.getId(), (int) answeredCount, shouldClose);
   }
@@ -80,6 +61,32 @@ public class AnswerTxService {
   @Transactional(readOnly = true)
   public long countAnswered(Long runQuestionId) {
     return answerRepository.countByRunQuestionId(runQuestionId);
+  }
+
+  private void validateAnswerWindow(RunQuestion question, Long roomId, Instant now) {
+    if (!question.getQuizRun().getRoomId().equals(roomId)) {
+      throw new BusinessException(ErrorCode.QUESTION_NOT_FOUND);
+    }
+    if (!question.getQuizRun().isRunning()) {
+      throw new BusinessException(ErrorCode.QUESTION_CLOSED);
+    }
+
+    // 06 규격 5절: closed_at이 없고 서버 시각이 closes_at + 1초 이내여야 한다.
+    Instant lastAcceptedAt = question.getClosesAt() != null ? question.getClosesAt().plusSeconds(1) : now;
+    if (!question.isOpen() || question.getClosedAt() != null || now.isAfter(lastAcceptedAt)) {
+      throw new BusinessException(ErrorCode.QUESTION_CLOSED);
+    }
+  }
+
+  private boolean hasEveryOnlineParticipantAnswered(Long runQuestionId, Set<Long> onlineParticipantIds) {
+    if (onlineParticipantIds.isEmpty()) {
+      return false;
+    }
+
+    // 전체 답변 수에는 접속을 끊은 참가자도 포함될 수 있다.
+    long onlineAnsweredCount = answerRepository.countByRunQuestionIdAndParticipantIdIn(
+        runQuestionId, onlineParticipantIds);
+    return onlineAnsweredCount == onlineParticipantIds.size();
   }
 
   private void saveOrUpdateAnswer(RunQuestion question, Long participantId, RunChoice choice, Instant now) {

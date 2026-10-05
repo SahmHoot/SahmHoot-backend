@@ -56,7 +56,7 @@ public class QuizCoreService {
 
   /**
    * 문항 마감 처리 (시간 만료 또는 5번 AnswerService의 전원 응답 판정 시 호출).
-   * 실시간 규격 5절: 마감 시 QUESTION_CLOSED 발행 후 3초 뒤 다음 문항 열기(마지막이면 결과 화면)를 예약한다.
+   * 실시간 메시지 발행과 다음 문항 예약은 후속 연동 작업이다.
    */
   public void closeQuestion(Long roomId, Long runQuestionId) {
     roomLockManager.executeWithLock(roomId, () -> {
@@ -72,7 +72,7 @@ public class QuizCoreService {
 
   /**
    * 퀴즈 회차 종료 및 결과 집계.
-   * 마지막 문항 마감 3초 뒤 스케줄러에 의해 호출된다.
+   * 후속 스케줄러 연동 시 마지막 문항 마감 3초 뒤 호출한다.
    */
   public QuizResultResponse finishQuiz(Long roomId, Long runId) {
     return roomLockManager.executeWithLock(roomId, () -> {

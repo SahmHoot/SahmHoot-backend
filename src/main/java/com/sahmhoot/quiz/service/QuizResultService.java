@@ -21,7 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 5. Answer + Result: 퀴즈 결과 집계 서비스 뼈대.
+ * 5. Answer + Result: 퀴즈 결과 집계 서비스.
  * 퀴즈 회차 종료 시 문항별 정답, 선택지별 응답 수, 정답률/오답 수를 집계한다.
  * 개발 환경 규칙: 상태 조회의 경우 fetch join으로 N+1을 원천 차단한다.
  */
@@ -62,44 +62,52 @@ public class QuizResultService {
     for (RunQuestion question : questions) {
       List<RunChoice> choices = choicesByQuestionId.getOrDefault(question.getId(), List.of());
       List<Answer> questionAnswers = answersByQuestionId.getOrDefault(question.getId(), List.of());
-
-      Map<Long, Long> choiceCounts = questionAnswers.stream()
-          .collect(Collectors.groupingBy(a -> a.getRunChoice().getId(), Collectors.counting()));
-
-      Long correctChoiceId = choices.stream()
-          .filter(RunChoice::isCorrect)
-          .map(RunChoice::getId)
-          .findFirst()
-          .orElse(null);
-
-      int answeredCount = questionAnswers.size();
-      int correctCount = (int) questionAnswers.stream()
-          .filter(a -> a.getRunChoice().isCorrect())
-          .count();
-      int incorrectCount = answeredCount - correctCount;
-
-      List<QuizResultResponse.ChoiceResultDetail> choiceDetails = choices.stream()
-          .map(c -> new QuizResultResponse.ChoiceResultDetail(
-              c.getId(),
-              c.getOrderNo(),
-              c.getContent(),
-              choiceCounts.getOrDefault(c.getId(), 0L).intValue()
-          ))
-          .toList();
-
-      questionDetails.add(new QuizResultResponse.QuestionResultDetail(
-          question.getId(),
-          questionNo++,
-          question.getContent(),
-          correctChoiceId,
-          answeredCount,
-          correctCount,
-          incorrectCount,
-          choiceDetails
-      ));
+      questionDetails.add(buildQuestionResult(question, questionNo++, choices, questionAnswers));
     }
 
     log.info("Aggregated quiz result for runId={}: total questions={}", runId, questionDetails.size());
     return new QuizResultResponse(questionDetails);
+  }
+
+  private QuizResultResponse.QuestionResultDetail buildQuestionResult(
+      RunQuestion question,
+      int questionNo,
+      List<RunChoice> choices,
+      List<Answer> answers
+  ) {
+    Map<Long, Long> choiceCounts = answers.stream()
+        .collect(Collectors.groupingBy(a -> a.getRunChoice().getId(), Collectors.counting()));
+
+    Long correctChoiceId = choices.stream()
+        .filter(RunChoice::isCorrect)
+        .map(RunChoice::getId)
+        .findFirst()
+        .orElse(null);
+
+    int answeredCount = answers.size();
+    int correctCount = (int) answers.stream()
+        .filter(a -> a.getRunChoice().isCorrect())
+        .count();
+    int incorrectCount = answeredCount - correctCount;
+
+    List<QuizResultResponse.ChoiceResultDetail> choiceDetails = choices.stream()
+        .map(choice -> new QuizResultResponse.ChoiceResultDetail(
+            choice.getId(),
+            choice.getOrderNo(),
+            choice.getContent(),
+            choiceCounts.getOrDefault(choice.getId(), 0L).intValue()
+        ))
+        .toList();
+
+    return new QuizResultResponse.QuestionResultDetail(
+        question.getId(),
+        questionNo,
+        question.getContent(),
+        correctChoiceId,
+        answeredCount,
+        correctCount,
+        incorrectCount,
+        choiceDetails
+    );
   }
 }

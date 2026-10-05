@@ -48,11 +48,7 @@ public class QuizCoreTxService {
    */
   @Transactional
   public StartQuizResponse startQuiz(Long roomId, StartQuizRequest request, Long hostUserId) {
-    // 1. 방 조회 및 소유자 권한/상태 검증
-    RoomSnapshot room = roomPort.getRoom(roomId);
-    if (!room.hostId().equals(hostUserId)) {
-      throw new BusinessException(ErrorCode.FORBIDDEN);
-    }
+    RoomSnapshot room = getRoomOwnedBy(roomId, hostUserId);
     if (room.status() == RoomStatus.CLOSED) {
       throw new BusinessException(ErrorCode.ROOM_CLOSED);
     }
@@ -60,41 +56,13 @@ public class QuizCoreTxService {
       throw new BusinessException(ErrorCode.QUIZ_ALREADY_RUNNING);
     }
 
-    // 2. 문제 세트 조회 및 소유자 본인 세트 여부 검증 (API 명세 23번 253행)
-    QuestionSetSnapshot questionSet = questionSetPort.getQuestionSet(request.questionSetId());
-    if (!questionSet.hostId().equals(hostUserId)) {
-      throw new BusinessException(ErrorCode.FORBIDDEN, "자신이 작성한 문제 세트만 선택할 수 있습니다.");
-    }
-
-    // 3. 회차 생성 (RUNNING)
-    Instant now = Instant.now();
-    QuizRun quizRun = QuizRun.builder()
-        .roomId(roomId)
-        .questionSetId(request.questionSetId())
-        .status(QuizRunStatus.RUNNING)
-        .startedAt(now)
-        .build();
-    quizRun = quizRunRepository.saveAndFlush(quizRun);
-
-    // 4. 방 상태를 PLAYING으로 전환
+    validateQuestionSetOwner(request.questionSetId(), hostUserId);
+    QuizRun quizRun = createQuizRun(roomId, request.questionSetId());
     roomPort.updateStatus(roomId, RoomStatus.PLAYING);
+    StartQuizResponse response = copyQuestionsAndOpenFirst(quizRun);
 
-    // 5. 문항 스냅샷 복사 및 1번 문항 OPEN 처리 (API 명세 23번 253행)
-    questionSetPort.copyQuestionsToQuizRun(request.questionSetId(), quizRun.getId());
-    List<RunQuestion> questions = runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(quizRun.getId());
-    if (questions.isEmpty()) {
-      throw new BusinessException(ErrorCode.EMPTY_QUESTION_SET);
-    }
-
-    RunQuestion firstQuestion = questions.getFirst();
-    Long firstRunQuestionId = firstQuestion.getId();
-    Instant openedAt = Instant.now();
-    Instant closesAt = openedAt.plus(Duration.ofSeconds(firstQuestion.getTimeLimitSeconds()));
-    firstQuestion.open(openedAt, closesAt);
-    runQuestionRepository.save(firstQuestion);
-
-    log.info("Started quiz runId={} for roomId={}, totalQuestions={}", quizRun.getId(), roomId, questions.size());
-    return new StartQuizResponse(quizRun.getId(), questions.size(), firstRunQuestionId, closesAt);
+    log.info("Started quiz runId={} for roomId={}, totalQuestions={}", quizRun.getId(), roomId, response.totalQuestions());
+    return response;
   }
 
   /**
@@ -102,10 +70,7 @@ public class QuizCoreTxService {
    */
   @Transactional
   public void abortQuiz(Long roomId, Long runId, Long hostUserId) {
-    RoomSnapshot room = roomPort.getRoom(roomId);
-    if (!room.hostId().equals(hostUserId)) {
-      throw new BusinessException(ErrorCode.FORBIDDEN);
-    }
+    getRoomOwnedBy(roomId, hostUserId);
 
     QuizRun quizRun = quizRunRepository.findByIdAndRoomId(runId, roomId)
         .orElseThrow(() -> new BusinessException(ErrorCode.QUIZ_RUN_NOT_FOUND));
@@ -136,10 +101,7 @@ public class QuizCoreTxService {
    */
   @Transactional
   public void closeResult(Long roomId, Long hostUserId) {
-    RoomSnapshot room = roomPort.getRoom(roomId);
-    if (!room.hostId().equals(hostUserId)) {
-      throw new BusinessException(ErrorCode.FORBIDDEN);
-    }
+    RoomSnapshot room = getRoomOwnedBy(roomId, hostUserId);
 
     QuizRun latestRun = quizRunRepository.findTopByRoomIdOrderByIdDesc(roomId)
         .orElseThrow(() -> new BusinessException(ErrorCode.ROOM_NOT_SHOWING_RESULT));
@@ -182,32 +144,17 @@ public class QuizCoreTxService {
     log.info("Closed runQuestionId={} at {}", runQuestionId, actualClosedAt);
 
     List<RunQuestion> allQuestions = runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(quizRun.getId());
-    int currentIndex = -1;
-    for (int i = 0; i < allQuestions.size(); i++) {
-      if (allQuestions.get(i).getId().equals(question.getId())) {
-        currentIndex = i;
-        break;
-      }
-    }
-    if (currentIndex < 0) {
-      throw new IllegalStateException("Closed question is missing from its quiz run: " + question.getId());
-    }
+    int currentIndex = findQuestionIndex(allQuestions, question.getId());
     boolean isLast = (currentIndex == allQuestions.size() - 1);
     Integer nextOrderNo = !isLast
         ? allQuestions.get(currentIndex + 1).getOrderNo()
         : null;
 
-    Long correctChoiceId = runChoiceRepository.findByRunQuestionIdOrderByOrderNoAsc(question.getId()).stream()
-        .filter(RunChoice::isCorrect)
-        .map(RunChoice::getId)
-        .findFirst()
-        .orElse(null);
-
     Instant nextOpensAt = actualClosedAt.plusSeconds(3);
     return CloseQuestionResult.closed(
         quizRun.getId(),
         question.getId(),
-        correctChoiceId,
+        findCorrectChoiceId(question.getId()),
         isLast,
         nextOrderNo,
         nextOpensAt,
@@ -217,7 +164,7 @@ public class QuizCoreTxService {
 
   /**
    * 퀴즈 종료 및 결과 집계 트랜잭션.
-   * 마지막 문항 마감 3초 뒤 스케줄러에 의해 호출된다.
+   * 후속 스케줄러 연동 시 마지막 문항 마감 3초 뒤 호출한다.
    */
   @Transactional
   public QuizResultResponse finishQuiz(Long roomId, Long runId) {
@@ -262,5 +209,62 @@ public class QuizCoreTxService {
     question.open(now, closesAt);
     runQuestionRepository.save(question);
     log.info("Opened runQuestionId={} (orderNo={}) until {}", question.getId(), orderNo, closesAt);
+  }
+
+  private RoomSnapshot getRoomOwnedBy(Long roomId, Long hostUserId) {
+    RoomSnapshot room = roomPort.getRoom(roomId);
+    if (!room.hostId().equals(hostUserId)) {
+      throw new BusinessException(ErrorCode.FORBIDDEN);
+    }
+    return room;
+  }
+
+  private void validateQuestionSetOwner(Long questionSetId, Long hostUserId) {
+    QuestionSetSnapshot questionSet = questionSetPort.getQuestionSet(questionSetId);
+    if (!questionSet.hostId().equals(hostUserId)) {
+      throw new BusinessException(ErrorCode.FORBIDDEN, "자신이 작성한 문제 세트만 선택할 수 있습니다.");
+    }
+  }
+
+  private QuizRun createQuizRun(Long roomId, Long questionSetId) {
+    QuizRun quizRun = QuizRun.builder()
+        .roomId(roomId)
+        .questionSetId(questionSetId)
+        .status(QuizRunStatus.RUNNING)
+        .startedAt(Instant.now())
+        .build();
+    return quizRunRepository.saveAndFlush(quizRun);
+  }
+
+  private StartQuizResponse copyQuestionsAndOpenFirst(QuizRun quizRun) {
+    questionSetPort.copyQuestionsToQuizRun(quizRun.getQuestionSetId(), quizRun.getId());
+    List<RunQuestion> questions = runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(quizRun.getId());
+    if (questions.isEmpty()) {
+      throw new BusinessException(ErrorCode.EMPTY_QUESTION_SET);
+    }
+
+    RunQuestion firstQuestion = questions.getFirst();
+    Instant openedAt = Instant.now();
+    Instant closesAt = openedAt.plus(Duration.ofSeconds(firstQuestion.getTimeLimitSeconds()));
+    firstQuestion.open(openedAt, closesAt);
+    runQuestionRepository.save(firstQuestion);
+    return new StartQuizResponse(quizRun.getId(), questions.size(), firstQuestion.getId(), closesAt);
+  }
+
+  private int findQuestionIndex(List<RunQuestion> questions, Long questionId) {
+    for (int i = 0; i < questions.size(); i++) {
+      if (questions.get(i).getId().equals(questionId)) {
+        return i;
+      }
+    }
+    throw new IllegalStateException("Closed question is missing from its quiz run: " + questionId);
+  }
+
+  private Long findCorrectChoiceId(Long questionId) {
+    return runChoiceRepository.findByRunQuestionIdOrderByOrderNoAsc(questionId).stream()
+        .filter(RunChoice::isCorrect)
+        .map(RunChoice::getId)
+        .findFirst()
+        .orElse(null);
   }
 }
