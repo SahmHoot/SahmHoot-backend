@@ -4,4 +4,7 @@ spring:
   flyway:
     locations: classpath:db/migration
 
-# TODO(3): app.jwt.secret (테스트 전용 값)
+app:
+  jwt:
+    # 테스트 전용 값(운영·로컬에서 쓰지 않음)
+    secret: test-only-jwt-secret-0123456789abcdefghijklmnop

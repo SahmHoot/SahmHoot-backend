@@ -18,8 +18,29 @@ spring:
   flyway:
     locations: classpath:db/migration
 
-# TODO(3): app.jwt.* (secret, expiration-days)
-# TODO(1): app.cors.allowed-origins (WebSocket 허용 origin)
+  mail:
+    # 비워 두면 메일 대신 서버 로그에 인증 코드를 찍는다(로컬 개발용)
+    host: ${MAIL_HOST:}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail.smtp.auth: true
+      mail.smtp.starttls.enable: true
+
+app:
+  jwt:
+    # 32바이트 이상. 비워 두면 실행할 때마다 임시 키(로컬 전용). 운영은 환경변수 JWT_SECRET 필수
+    secret: ${JWT_SECRET:}
+    expiration-days: 14
+  mail:
+    from: ${MAIL_FROM:no-reply@sahmhoot.local}
+  auth:
+    # 쉼표로 구분(예: syuin.ac.kr). 비우면 도메인 제한 없음
+    allowed-email-domains: ${ALLOWED_EMAIL_DOMAINS:}
+  cors:
+    # REST CORS와 WebSocket 허용 origin. 운영은 실제 도메인만
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
 
 server:
   port: 8080
