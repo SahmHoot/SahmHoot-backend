@@ -1,6 +1,6 @@
 package com.sahmhoot.common.error;
 
-/** 서비스에서 던지면 GlobalExceptionHandler가 05 공통 에러 형식으로 바꾼다. */
+/** 서비스에서 던지면 각 모듈의 에러 핸들러(예: AuthExceptionHandler)가 05 공통 에러 형식으로 바꾼다. */
 public class ApiException extends RuntimeException {
 
   private final ErrorCode errorCode;

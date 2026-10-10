@@ -1,5 +1,9 @@
-package com.sahmhoot.common.error;
+package com.sahmhoot.auth;
 
+import com.sahmhoot.common.error.ApiException;
+import com.sahmhoot.common.error.ErrorCode;
+import com.sahmhoot.common.error.ErrorResponse;
+import com.sahmhoot.user.UserController;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -8,9 +12,15 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+/**
+ * 인증·사용자 API(auth, user 패키지) 전용 에러 핸들러.
+ *
+ * <p>다른 모듈의 핸들러와 범위가 겹치지 않게 패키지를 한정한다. 범위가 겹치면 먼저 검사된 Advice가 예외를 가져가서
+ * 다른 모듈의 핸들러가 동작하지 않는다. 어느 핸들러도 처리하지 못한 에러는 공통 에러 처리에 맡긴다.
+ */
 @Slf4j
-@RestControllerAdvice
-public class GlobalExceptionHandler {
+@RestControllerAdvice(basePackageClasses = {AuthController.class, UserController.class})
+public class AuthExceptionHandler {
 
   @ExceptionHandler(ApiException.class)
   public ResponseEntity<ErrorResponse> handleApi(ApiException e) {
