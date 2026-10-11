@@ -1,8 +1,8 @@
 package com.sahmhoot.user;
 
 import com.sahmhoot.auth.AuthUser;
-import com.sahmhoot.common.error.ApiException;
-import com.sahmhoot.common.error.ErrorCode;
+import com.sahmhoot.auth.exception.ApiException;
+import com.sahmhoot.auth.exception.ErrorCode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;

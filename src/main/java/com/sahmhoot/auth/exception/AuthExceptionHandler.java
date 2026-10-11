@@ -1,8 +1,6 @@
-package com.sahmhoot.auth;
+package com.sahmhoot.auth.exception;
 
-import com.sahmhoot.common.error.ApiException;
-import com.sahmhoot.common.error.ErrorCode;
-import com.sahmhoot.common.error.ErrorResponse;
+import com.sahmhoot.auth.AuthController;
 import com.sahmhoot.user.UserController;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;

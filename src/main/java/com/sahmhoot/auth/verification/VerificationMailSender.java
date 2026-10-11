@@ -1,7 +1,7 @@
 package com.sahmhoot.auth.verification;
 
-import com.sahmhoot.common.error.ApiException;
-import com.sahmhoot.common.error.ErrorCode;
+import com.sahmhoot.auth.exception.ApiException;
+import com.sahmhoot.auth.exception.ErrorCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;

@@ -1,8 +1,8 @@
 package com.sahmhoot.auth.verification;
 
 import com.sahmhoot.auth.verification.EmailVerificationStore.Entry;
-import com.sahmhoot.common.error.ApiException;
-import com.sahmhoot.common.error.ErrorCode;
+import com.sahmhoot.auth.exception.ApiException;
+import com.sahmhoot.auth.exception.ErrorCode;
 import com.sahmhoot.user.UserRepository;
 import java.security.SecureRandom;
 import java.time.Clock;

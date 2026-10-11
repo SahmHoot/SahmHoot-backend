@@ -1,4 +1,4 @@
-package com.sahmhoot.common.error;
+package com.sahmhoot.auth.exception;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.List;
