@@ -8,7 +8,8 @@ package com.sahmhoot.websocket;
 public enum StompRejectCode {
   UNAUTHORIZED("로그인이 필요합니다."),
   FORBIDDEN("권한이 없습니다."),
-  NOT_PARTICIPANT("이 수업의 참여자가 아닙니다.");
+  NOT_PARTICIPANT("이 수업의 참여자가 아닙니다."),
+  RATE_LIMITED("요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.");
 
   private final String message;
 
