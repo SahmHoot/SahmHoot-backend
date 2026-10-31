@@ -2,6 +2,7 @@ package com.sahmhoot.room;
 
 import jakarta.persistence.*;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -28,6 +29,6 @@ public class RoomParticipant {
     this.roomId = roomId;
     this.userId = userId;
     this.nickname = nickname;
-    this.joinedAt = Instant.now();
+    this.joinedAt = Instant.now().truncatedTo(ChronoUnit.SECONDS);
   }
 }

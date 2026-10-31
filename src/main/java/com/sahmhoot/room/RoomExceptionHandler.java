@@ -23,13 +23,15 @@ public class RoomExceptionHandler {
   public ResponseEntity<ErrorResponse> validation(MethodArgumentNotValidException error) {
     var fields = error.getBindingResult().getFieldErrors().stream()
         .map(e -> new ErrorResponse.FieldError(e.getField(), e.getDefaultMessage())).toList();
-    return ResponseEntity.badRequest()
-        .body(new ErrorResponse(400, "VALIDATION_FAILED", "입력값을 확인해 주세요.", fields));
+    ErrorCode code = ErrorCode.VALIDATION_FAILED;
+    return ResponseEntity.status(code.status())
+        .body(new ErrorResponse(code.status().value(), code.name(), code.defaultMessage(), fields));
   }
 
   @ExceptionHandler(HttpMessageNotReadableException.class)
   public ResponseEntity<ErrorResponse> malformed(HttpMessageNotReadableException error) {
-    return ResponseEntity.badRequest().body(new ErrorResponse(400, "VALIDATION_FAILED",
+    ErrorCode code = ErrorCode.VALIDATION_FAILED;
+    return ResponseEntity.status(code.status()).body(new ErrorResponse(code.status().value(), code.name(),
         "요청 본문을 읽을 수 없습니다.", List.of(new ErrorResponse.FieldError("body", "JSON 형식을 확인해 주세요."))));
   }
 

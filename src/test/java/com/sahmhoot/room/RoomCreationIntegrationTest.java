@@ -1,6 +1,7 @@
 package com.sahmhoot.room;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -13,8 +14,11 @@ import com.sahmhoot.user.User;
 import com.sahmhoot.user.UserRepository;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 import org.junit.jupiter.api.*;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -86,6 +90,27 @@ class RoomCreationIntegrationTest {
         Long.class, id)).isEqualTo(1);
   }
 
+  @Test void creationTimestampsMatchDatabaseValues() throws Exception {
+    String body = create("{\"title\":\"시각 확인\"}", Role.PROFESSOR)
+        .andExpect(status().isCreated())
+        .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+    long roomId = ((Number) JsonPath.read(body, "$.id")).longValue();
+    Instant responseTime = Instant.parse(JsonPath.read(body, "$.createdAt"));
+    var participant = ArgumentCaptor.forClass(RoomParticipant.class);
+    verify(participants).saveAndFlush(participant.capture());
+    Instant entityJoinedAt = participant.getValue().getJoinedAt();
+    Instant databaseCreatedAt = jdbc.queryForObject("SELECT created_at FROM rooms WHERE id = ?",
+        LocalDateTime.class, roomId).toInstant(ZoneOffset.UTC);
+    Instant databaseJoinedAt = jdbc.queryForObject(
+        "SELECT joined_at FROM room_participants WHERE room_id = ? AND user_id = ?",
+        LocalDateTime.class, roomId, professor.getId()).toInstant(ZoneOffset.UTC);
+    assertAll(
+        () -> assertThat(responseTime.getNano()).isZero(),
+        () -> assertThat(responseTime).isEqualTo(databaseCreatedAt),
+        () -> assertThat(entityJoinedAt.getNano()).isZero(),
+        () -> assertThat(entityJoinedAt).isEqualTo(databaseJoinedAt));
+  }
+
   @ParameterizedTest @ValueSource(ints = {1, 50})
   void acceptsTitleLengthBoundaries(int length) throws Exception {
     create("{\"title\":\"" + "가".repeat(length) + "\"}", Role.PROFESSOR)
@@ -96,7 +121,9 @@ class RoomCreationIntegrationTest {
   @ValueSource(strings = {"{}", "{\"title\":null}", "{\"title\":\"\"}", "{\"title\":\"   \"}"})
   void invalidTitleDoesNotCreateRoom(String body) throws Exception {
     create(body, Role.PROFESSOR).andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.status").value(400))
         .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+        .andExpect(jsonPath("$.message").value("입력값을 확인해 주세요."))
         .andExpect(jsonPath("$.fieldErrors[0].field").value("title"));
     assertThat(roomCount()).isZero();
     verifyNoInteractions(codes);
@@ -126,8 +153,11 @@ class RoomCreationIntegrationTest {
   @ParameterizedTest @ValueSource(strings = {"", "{", "null"})
   void malformedBodyUsesCommonValidationFormat(String body) throws Exception {
     create(body, Role.PROFESSOR).andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.status").value(400))
         .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
-        .andExpect(jsonPath("$.fieldErrors[0].field").value("body"));
+        .andExpect(jsonPath("$.message").value("요청 본문을 읽을 수 없습니다."))
+        .andExpect(jsonPath("$.fieldErrors[0].field").value("body"))
+        .andExpect(jsonPath("$.fieldErrors[0].message").value("JSON 형식을 확인해 주세요."));
   }
 
   private String closedRoom() {
