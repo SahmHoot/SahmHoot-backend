@@ -14,6 +14,7 @@ import org.springframework.messaging.Message;
 import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.MessageBuilder;
+import org.springframework.messaging.support.MessageHeaderAccessor;
 
 class StompAuthChannelInterceptorTest {
 
@@ -127,6 +128,20 @@ class StompAuthChannelInterceptorTest {
     rejected(frame(StompCommand.SEND, 2L, "/app/rooms/10/reaction", null), "2:RATE_LIMITED");
     Thread.sleep(1_100);
     allowed(frame(StompCommand.SEND, 2L, "/app/rooms/10/reaction", null));
+  }
+
+  @Test
+  void 탭이_달라도_같은_사용자는_한도를_같이_쓴다() {
+    for (int i = 0; i < 5; i++) {
+      allowed(inSession(frame(StompCommand.SEND, 2L, "/app/rooms/10/chat", null), "tab-" + (i % 2)));
+    }
+    rejected(inSession(frame(StompCommand.SEND, 2L, "/app/rooms/10/chat", null), "tab-2"), "2:RATE_LIMITED");
+  }
+
+  private static Message<?> inSession(Message<?> m, String sessionId) {
+    StompHeaderAccessor a = MessageHeaderAccessor.getAccessor(m, StompHeaderAccessor.class);
+    a.setSessionId(sessionId);
+    return m;
   }
 
   @Test
