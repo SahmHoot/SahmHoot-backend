@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.sahmhoot.auth.AuthUser;
 import com.sahmhoot.auth.jwt.JwtProperties;
 import com.sahmhoot.auth.jwt.JwtProvider;
+import com.sahmhoot.common.ratelimit.RateLimiter;
 import com.sahmhoot.user.Role;
 import java.util.ArrayList;
 import java.util.List;
@@ -13,6 +14,7 @@ import org.springframework.messaging.Message;
 import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.MessageBuilder;
+import org.springframework.messaging.support.MessageHeaderAccessor;
 
 class StompAuthChannelInterceptorTest {
 
@@ -50,7 +52,7 @@ class StompAuthChannelInterceptorTest {
       };
 
   private final StompAuthChannelInterceptor interceptor =
-      new StompAuthChannelInterceptor(jwt, access, rejection);
+      new StompAuthChannelInterceptor(jwt, access, rejection, new RateLimiter());
 
   private Message<?> frame(StompCommand cmd, Long userId, String dest, String auth) {
     StompHeaderAccessor a = StompHeaderAccessor.create(cmd);
@@ -106,5 +108,53 @@ class StompAuthChannelInterceptorTest {
     allowed(frame(StompCommand.SEND, 2L, "/app/rooms/10/chat", null));
     rejected(frame(StompCommand.SEND, 2L, "/topic/rooms/10/quiz", null), "2:FORBIDDEN");
     rejected(frame(StompCommand.SEND, 2L, "/app/rooms/20/chat", null), "2:NOT_PARTICIPANT");
+  }
+
+  @Test
+  void 채팅은_10초에_5건까지() {
+    for (int i = 0; i < 5; i++) {
+      allowed(frame(StompCommand.SEND, 2L, "/app/rooms/10/chat", null));
+    }
+    rejected(frame(StompCommand.SEND, 2L, "/app/rooms/10/chat", null), "2:RATE_LIMITED");
+    // 다른 사용자는 따로 센다.
+    allowed(frame(StompCommand.SEND, 1L, "/app/rooms/10/chat", null));
+  }
+
+  @Test
+  void 이모지는_1초에_3건까지_지나면_다시_허용() throws InterruptedException {
+    for (int i = 0; i < 3; i++) {
+      allowed(frame(StompCommand.SEND, 2L, "/app/rooms/10/reaction", null));
+    }
+    rejected(frame(StompCommand.SEND, 2L, "/app/rooms/10/reaction", null), "2:RATE_LIMITED");
+    Thread.sleep(1_100);
+    allowed(frame(StompCommand.SEND, 2L, "/app/rooms/10/reaction", null));
+  }
+
+  @Test
+  void 탭이_달라도_같은_사용자는_한도를_같이_쓴다() {
+    for (int i = 0; i < 5; i++) {
+      allowed(inSession(frame(StompCommand.SEND, 2L, "/app/rooms/10/chat", null), "tab-" + (i % 2)));
+    }
+    rejected(inSession(frame(StompCommand.SEND, 2L, "/app/rooms/10/chat", null), "tab-2"), "2:RATE_LIMITED");
+  }
+
+  private static Message<?> inSession(Message<?> m, String sessionId) {
+    StompHeaderAccessor a = MessageHeaderAccessor.getAccessor(m, StompHeaderAccessor.class);
+    a.setSessionId(sessionId);
+    return m;
+  }
+
+  @Test
+  void 답안은_빈도_제한이_없다() {
+    for (int i = 0; i < 20; i++) {
+      allowed(frame(StompCommand.SEND, 2L, "/app/rooms/10/answer", null));
+    }
+  }
+
+  @Test
+  void 권한_없는_전송은_한도를_쓰지_않는다() {
+    for (int i = 0; i < 6; i++) {
+      rejected(frame(StompCommand.SEND, 3L, "/app/rooms/10/chat", null), "3:NOT_PARTICIPANT");
+    }
   }
 }

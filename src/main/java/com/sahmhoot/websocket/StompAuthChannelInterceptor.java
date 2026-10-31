@@ -2,7 +2,9 @@ package com.sahmhoot.websocket;
 
 import com.sahmhoot.auth.AuthUser;
 import com.sahmhoot.auth.jwt.JwtProvider;
+import com.sahmhoot.common.ratelimit.RateLimiter;
 import java.security.Principal;
+import java.time.Duration;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +22,7 @@ import org.springframework.stereotype.Component;
  * <ol>
  *   <li>CONNECT: Authorization: Bearer JWT 검증 → Principal(이름 = userId). 실패하면 거부
  *   <li>SUBSCRIBE·SEND: 허용 목록 → 권한 검사 → 나머지 전부 거부(default deny)
+ *   <li>SEND 전송 빈도(06 2절): 채팅 10초 5건, 이모지 1초 3건. 방·사용자 단위라 탭을 늘려도 같은 한도
  * </ol>
  *
  * 거부한 프레임은 버리고(null 반환) {@link StompRejectionSender}로 알린다. 예외를 그대로 던지면
@@ -42,6 +45,7 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
   private final JwtProvider jwtProvider;
   private final RoomAccessChecker roomAccess;
   private final StompRejectionSender rejection;
+  private final RateLimiter rateLimiter;
 
   @Override
   public Message<?> preSend(Message<?> message, MessageChannel channel) {
@@ -117,6 +121,21 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
       throw deny(StompRejectCode.FORBIDDEN);
     }
     requireParticipant(m.group(1), user);
+    checkRate(m.group(2), m.group(1), user);
+  }
+
+  /** 권한 검사를 통과한 전송만 센다. 권한 없는 요청이 사용자의 한도를 쓰지 않게 하려는 순서다. */
+  private void checkRate(String kind, String roomId, AuthUser user) {
+    String key = kind + ":" + roomId + ":" + user.userId();
+    boolean allowed =
+        switch (kind) {
+          case "chat" -> rateLimiter.tryAcquire(key, 5, Duration.ofSeconds(10));
+          case "reaction" -> rateLimiter.tryAcquire(key, 3, Duration.ofSeconds(1));
+          default -> true;
+        };
+    if (!allowed) {
+      throw deny(StompRejectCode.RATE_LIMITED);
+    }
   }
 
   private void requireParticipant(String roomId, AuthUser user) {
