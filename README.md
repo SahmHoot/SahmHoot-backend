@@ -11,7 +11,7 @@
 | Spring Boot | 4.1.1 |
 | 빌드 | Gradle (wrapper 포함, 별도 설치 불필요) |
 | DB | MySQL 8.4 LTS (Docker), Flyway |
-| 현재 범위 | 애플리케이션 기동 및 Health API |
+| 현재 범위 | 애플리케이션 기동, Health API, Flyway V1 스키마(10개 테이블) |
 
 ## 현재 구현 범위
 
@@ -19,6 +19,7 @@
 - `HealthController` (`GET /api/health`)
 - 개발 초기용 최소 `SecurityConfig` (`/api/**` 인증 없이 허용)
 - 기본 Application Test 및 HealthController Test
+- Flyway `V1__init.sql` (10개 테이블 스키마, DB 레포 `sahmhoot.sql`과 동일)
 
 다음 기능은 아직 구현하지 않았습니다.
 
@@ -40,7 +41,7 @@
 ## 협업 규칙 요약
 
 - 이슈는 이 레포(백엔드)에 모읍니다. 프론트 작업도 여기 이슈를 만듭니다.
-- 브랜치: `main`(배포본) / `develop`(기본) / `feature/{이슈번호}-{영문}` / `fix/{이슈번호}-{영문}`
+- 브랜치: `main`(배포본) / `develop`(기본) / `feat/{이슈번호}-{영문}` / `fix/{이슈번호}-{영문}`
 - 같은 이슈 작업은 두 레포에 같은 브랜치 이름을 씁니다.
 - `main`·`develop` 직접 push 금지, PR 필수. 승인은 권장이고, 공통 영역(`common/`, 보안·WebSocket 설정, 마이그레이션, `build.gradle`, `package.json`) 변경은 1명 확인 후 머지. feature → develop은 Squash merge.
 - 기능 하나 = 백엔드 PR + 프론트 PR. 백엔드를 먼저 머지합니다.
@@ -72,7 +73,7 @@ docker compose -f docker.yml ps   # sahmhoot-mysql이 healthy면 준비 완료
   ```bash
   docker exec -it sahmhoot-mysql mysql -uroot -p -e "CREATE DATABASE IF NOT EXISTS sahmhoot_test CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; GRANT ALL PRIVILEGES ON sahmhoot_test.* TO 'sahmhoot_user'@'%';"
   ```
-- 현재 `src/main/resources/db/migration`에는 마이그레이션이 없습니다. 데이터베이스 연결 및 빈 스키마에서 애플리케이션 기동만 확인합니다.
+- 처음 기동하면 Flyway가 `src/main/resources/db/migration/V1__init.sql`을 적용해 테이블 10개를 만듭니다. 이미 적용된 마이그레이션 파일은 수정하지 않고, 변경은 `V2__...sql`처럼 새 파일로 추가합니다.
 - 끄기 `docker compose -f docker.yml stop`, 완전 초기화(데이터 삭제) `docker compose -f docker.yml down -v`
 
 ### 2. 로컬 설정 파일 만들기 (처음 한 번)
