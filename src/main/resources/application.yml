@@ -44,3 +44,21 @@ app:
 
 server:
   port: 8080
+
+# API 문서(NFR-12). 기본은 비공개, local 프로파일에서만 /swagger-ui.html·/v3/api-docs를 연다
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+---
+spring:
+  config:
+    activate:
+      on-profile: local
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

@@ -30,8 +30,9 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 /**
  * JWT 기반 보안 설정.
  *
- * <p>공개: /api/health, /api/auth/** (05 API 1~4번), /ws (STOMP는 CONNECT 프레임에서 따로 인증). 그 밖의
- * 요청은 토큰 필요(없거나 틀리면 401 UNAUTHORIZED). 방 소유자 등 세부 권한은 각 서비스에서 검사한다.
+ * <p>공개: /api/health, /api/auth/** (05 API 1~4번), /ws (STOMP는 CONNECT 프레임에서 따로 인증),
+ * /swagger-ui·/v3/api-docs (local 프로파일에서만 켜짐). 그 밖의 요청은 토큰 필요(없거나 틀리면 401
+ * UNAUTHORIZED). 방 소유자 등 세부 권한은 각 서비스에서 검사한다.
  */
 @Configuration
 @EnableWebSecurity
@@ -52,6 +53,9 @@ public class SecurityConfig {
                 auth.requestMatchers(HttpMethod.OPTIONS, "/**")
                     .permitAll()
                     .requestMatchers("/api/health", "/api/auth/**", "/ws", "/ws/**", "/error")
+                    .permitAll()
+                    .requestMatchers(
+                        "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs", "/v3/api-docs/**")
                     .permitAll()
                     .anyRequest()
                     .authenticated())
