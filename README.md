@@ -41,7 +41,7 @@
 ## 협업 규칙 요약
 
 - 이슈는 이 레포(백엔드)에 모읍니다. 프론트 작업도 여기 이슈를 만듭니다.
-- 브랜치: `main`(배포본) / `develop`(기본) / `feature/{이슈번호}-{영문}` / `fix/{이슈번호}-{영문}`
+- 브랜치: `main`(배포본) / `develop`(기본) / `feat/{이슈번호}-{영문}` / `fix/{이슈번호}-{영문}`
 - 같은 이슈 작업은 두 레포에 같은 브랜치 이름을 씁니다.
 - `main`·`develop` 직접 push 금지, PR 필수. 승인은 권장이고, 공통 영역(`common/`, 보안·WebSocket 설정, 마이그레이션, `build.gradle`, `package.json`) 변경은 1명 확인 후 머지. feature → develop은 Squash merge.
 - 기능 하나 = 백엔드 PR + 프론트 PR. 백엔드를 먼저 머지합니다.
