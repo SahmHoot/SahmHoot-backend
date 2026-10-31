@@ -82,6 +82,132 @@ class QuestionSetPersistenceIntegrationTest {
     return jdbc.queryForObject("SELECT id FROM quiz_runs WHERE room_id = ?", Long.class, roomId);
   }
 
+  private static final String QUESTION_BODY = """
+      {"type":"TRUE_FALSE","content":"새 문항",
+       "choices":[{"content":"O","isCorrect":true},{"content":"X","isCorrect":false}]}
+      """;
+
+  @Test void httpQuestionCrudPersistsChoicesAndCompactsOrder() throws Exception {
+    Long setId = create(null);
+    String path = "/api/question-sets/" + setId + "/questions";
+    var authenticated = user(professor.id().toString());
+    for (int i = 1; i <= 3; i++) {
+      mvc.perform(post(path).with(authenticated).contentType(MediaType.APPLICATION_JSON).content(QUESTION_BODY))
+          .andExpect(status().isCreated()).andExpect(jsonPath("$.orderNo").value(i))
+          .andExpect(jsonPath("$.timeLimitSeconds").value(60))
+          .andExpect(jsonPath("$.choices[1].orderNo").value(2));
+    }
+    var initial = sets.detail(setId, professor.id()).questions();
+    Long middleId = initial.get(1).id();
+    var oldChoices = initial.get(1).choices().stream().map(ChoiceResponse::id).toList();
+    mvc.perform(put(path + "/" + middleId).with(authenticated).contentType(MediaType.APPLICATION_JSON)
+        .content("""
+            {"type":"MULTIPLE_CHOICE","content":"수정 문항","timeLimitSeconds":10,
+             "choices":[{"content":"A","isCorrect":false},{"content":"B","isCorrect":true},
+                        {"content":"C","isCorrect":false},{"content":"D","isCorrect":false}]}
+            """))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.orderNo").value(2))
+        .andExpect(jsonPath("$.choices.length()").value(4));
+    assertThat(choiceRepository.findAllById(oldChoices)).isEmpty();
+    var updated = sets.detail(setId, professor.id()).questions().get(1);
+    assertThat(updated.content()).isEqualTo("수정 문항");
+    assertThat(updated.timeLimitSeconds()).isEqualTo(10);
+    assertThat(updated.choices()).extracting(ChoiceResponse::isCorrect).containsExactly(false, true, false, false);
+    mvc.perform(delete(path + "/" + middleId).with(authenticated)).andExpect(status().isNoContent());
+    assertThat(questionRepository.findById(middleId)).isEmpty();
+    assertThat(choiceRepository.findByQuestionIdInOrderByOrderNoAsc(List.of(middleId))).isEmpty();
+    assertThat(sets.detail(setId, professor.id()).questions()).extracting(QuestionResponse::orderNo)
+        .containsExactly(1, 2);
+    assertThat(sets.detail(setId, professor.id()).questions()).extracting(QuestionResponse::id)
+        .containsExactly(initial.getFirst().id(), initial.getLast().id());
+    mvc.perform(post(path).with(authenticated).contentType(MediaType.APPLICATION_JSON).content(QUESTION_BODY))
+        .andExpect(status().isCreated()).andExpect(jsonPath("$.orderNo").value(3));
+    mvc.perform(delete(path + "/" + initial.getFirst().id()).with(authenticated))
+        .andExpect(status().isNoContent());
+    assertThat(sets.detail(setId, professor.id()).questions()).extracting(QuestionResponse::orderNo)
+        .containsExactly(1, 2);
+  }
+
+  @Test void publicSetStillRequiresOwnershipForEveryQuestionMutation() throws Exception {
+    Long setId = create(Visibility.PUBLIC);
+    var q = question(setId, 1);
+    choices(q);
+    String path = "/api/question-sets/" + setId + "/questions";
+    for (var actor : List.of(student, createUser("PROFESSOR"))) {
+      for (var request : List.of(post(path), put(path + "/" + q.getId()), delete(path + "/" + q.getId()))) {
+        mvc.perform(request.with(user(actor.id().toString())).contentType(MediaType.APPLICATION_JSON)
+            .content(QUESTION_BODY)).andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+      }
+    }
+    assertThat(sets.detail(setId, professor.id()).questions()).hasSize(1);
+    assertThat(choiceRepository.findByQuestionQuestionSetId(setId)).hasSize(2);
+  }
+
+  @Test void questionFromAnotherSetCannotBeUpdatedOrDeleted() throws Exception {
+    Long first = create(null);
+    Long second = create(null);
+    var foreign = question(second, 1);
+    choices(foreign);
+    String path = "/api/question-sets/" + first + "/questions/" + foreign.getId();
+    for (var request : List.of(put(path), delete(path))) {
+      mvc.perform(request.with(user(professor.id().toString())).contentType(MediaType.APPLICATION_JSON)
+          .content(QUESTION_BODY)).andExpect(status().isNotFound())
+          .andExpect(jsonPath("$.code").value("QUESTION_NOT_FOUND"));
+    }
+    assertThat(sets.detail(second, professor.id()).questions()).hasSize(1);
+  }
+
+  @Test void missingSetReturnsQuestionNotFoundForUpdateAndDelete() throws Exception {
+    Long missingSetId = Long.MAX_VALUE;
+    assertThat(setRepository.existsById(missingSetId)).isFalse();
+    String path = "/api/question-sets/" + missingSetId + "/questions/1";
+    for (var request : List.of(put(path), delete(path))) {
+      mvc.perform(request.with(user(professor.id().toString())).contentType(MediaType.APPLICATION_JSON)
+          .content(QUESTION_BODY)).andExpect(status().isNotFound())
+          .andExpect(jsonPath("$.status").value(404))
+          .andExpect(jsonPath("$.code").value("QUESTION_NOT_FOUND"));
+    }
+  }
+
+  @Test void missingQuestionReturnsNotFoundForOwnerAndForbiddenForNonOwner() throws Exception {
+    Long setId = create(Visibility.PUBLIC);
+    Long missingQuestionId = Long.MAX_VALUE;
+    assertThat(questionRepository.existsById(missingQuestionId)).isFalse();
+    String path = "/api/question-sets/" + setId + "/questions/" + missingQuestionId;
+    for (var actor : List.of(professor, student)) {
+      boolean owner = actor.id().equals(professor.id());
+      for (var request : List.of(put(path), delete(path))) {
+        mvc.perform(request.with(user(actor.id().toString())).contentType(MediaType.APPLICATION_JSON)
+            .content(QUESTION_BODY)).andExpect(status().is(owner ? 404 : 403))
+            .andExpect(jsonPath("$.code").value(owner ? "QUESTION_NOT_FOUND" : "FORBIDDEN"));
+      }
+    }
+  }
+
+  @Test void missingSetStillUsesSetNotFoundForQuestionCreationAndSetCrud() throws Exception {
+    Long missingSetId = Long.MAX_VALUE;
+    assertThat(setRepository.existsById(missingSetId)).isFalse();
+    String path = "/api/question-sets/" + missingSetId;
+    for (var request : List.of(post(path + "/questions").content(QUESTION_BODY),
+        get(path), patch(path).content("{}"), delete(path))) {
+      mvc.perform(request.with(user(professor.id().toString())).contentType(MediaType.APPLICATION_JSON))
+          .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("QUESTION_SET_NOT_FOUND"));
+    }
+  }
+
+  @Test void invalidQuestionUpdatePreservesExistingData() throws Exception {
+    Long setId = create(null);
+    var q = question(setId, 1);
+    choices(q);
+    mvc.perform(put("/api/question-sets/" + setId + "/questions/" + q.getId())
+        .with(user(professor.id().toString())).contentType(MediaType.APPLICATION_JSON)
+        .content(QUESTION_BODY.replace("false", "true")))
+        .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    assertThat(sets.detail(setId, professor.id()).questions().getFirst().content()).isEqualTo("문항 1");
+    assertThat(choiceRepository.findByQuestionQuestionSetId(setId)).hasSize(2);
+  }
+
   @Test void createDefaultsAndReadModels() {
     Long id = create(null);
     var summary = query.summary(id);

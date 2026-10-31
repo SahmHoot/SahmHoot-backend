@@ -1,6 +1,7 @@
 package com.sahmhoot.questionset.exception;
 
 public enum QuestionSetErrorCode {
+  QUESTION_NOT_FOUND(404, "존재하지 않는 문항입니다."),
   VALIDATION_FAILED(400, "입력값 형식 오류입니다."),
   UNAUTHORIZED(401, "인증이 필요합니다."),
   FORBIDDEN(403, "권한이 없습니다."),
