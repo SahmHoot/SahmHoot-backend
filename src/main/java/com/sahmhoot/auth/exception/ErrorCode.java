@@ -2,12 +2,13 @@ package com.sahmhoot.auth.exception;
 
 import org.springframework.http.HttpStatus;
 
-/** 인증·사용자(auth, user) 모듈의 에러 코드. 이름은 05 API 명세 5절을 따른다. */
+/** 인증·사용자 및 이 형식을 공유하는 API의 에러 코드. 이름은 05 API 명세 5절을 따른다. */
 public enum ErrorCode {
   VALIDATION_FAILED(HttpStatus.BAD_REQUEST, "입력값을 확인해 주세요."),
   UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다."),
   INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED, "이메일 또는 비밀번호가 올바르지 않습니다."),
   FORBIDDEN(HttpStatus.FORBIDDEN, "권한이 없습니다."),
+  ROOM_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 수업 방입니다."),
   EMAIL_ALREADY_EXISTS(HttpStatus.CONFLICT, "이미 가입된 이메일입니다."),
   EMAIL_DOMAIN_NOT_ALLOWED(HttpStatus.BAD_REQUEST, "허용되지 않은 이메일 도메인입니다."),
   VERIFICATION_TOO_FREQUENT(HttpStatus.TOO_MANY_REQUESTS, "인증 코드는 60초에 한 번 보낼 수 있습니다."),

@@ -3,12 +3,14 @@ package com.sahmhoot.room;
 import com.sahmhoot.auth.exception.ApiException;
 import com.sahmhoot.auth.exception.ErrorCode;
 import com.sahmhoot.auth.exception.ErrorResponse;
+import com.sahmhoot.quiz.exception.BusinessException;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @Slf4j
 @RestControllerAdvice(assignableTypes = RoomController.class)
@@ -17,6 +19,21 @@ public class RoomExceptionHandler {
   public ResponseEntity<ErrorResponse> business(ApiException error) {
     return ResponseEntity.status(error.getErrorCode().status())
         .body(ErrorResponse.of(error.getErrorCode(), error.getMessage()));
+  }
+
+  @ExceptionHandler(BusinessException.class)
+  public ResponseEntity<ErrorResponse> quizBusiness(BusinessException error) {
+    var code = error.getErrorCode();
+    return ResponseEntity.status(code.getStatus()).body(
+        new ErrorResponse(code.getStatus().value(), code.name(), error.getMessage(), null));
+  }
+
+  @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+  public ResponseEntity<ErrorResponse> path(MethodArgumentTypeMismatchException error) {
+    ErrorCode code = ErrorCode.VALIDATION_FAILED;
+    return ResponseEntity.status(code.status()).body(new ErrorResponse(code.status().value(),
+        code.name(), code.defaultMessage(), List.of(new ErrorResponse.FieldError(
+            error.getName(), "숫자 형식의 교실 번호를 입력해 주세요."))));
   }
 
   @ExceptionHandler(MethodArgumentNotValidException.class)

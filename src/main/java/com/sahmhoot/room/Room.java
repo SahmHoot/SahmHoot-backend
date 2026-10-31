@@ -34,4 +34,9 @@ public class Room {
     this.status = RoomStatus.OPEN;
     this.createdAt = Instant.now().truncatedTo(ChronoUnit.SECONDS);
   }
+
+  public void close(Instant now) {
+    status = RoomStatus.CLOSED;
+    closedAt = now.truncatedTo(ChronoUnit.SECONDS);
+  }
 }
