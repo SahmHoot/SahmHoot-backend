@@ -7,6 +7,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * RoomPort의 기본 구현체.
@@ -40,6 +42,7 @@ public class JdbcRoomPort implements RoomPort {
   }
 
   @Override
+  @Transactional(propagation = Propagation.MANDATORY)
   public void updateStatus(Long roomId, RoomStatus status) {
     String sql = "UPDATE rooms SET status = ? WHERE id = ?";
     int updated = jdbcTemplate.update(sql, status.name(), roomId);

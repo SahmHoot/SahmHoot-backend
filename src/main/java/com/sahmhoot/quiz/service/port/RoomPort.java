@@ -16,6 +16,7 @@ public interface RoomPort {
    * 방 상태를 갱신한다 (예: OPEN -> PLAYING, PLAYING -> OPEN).
    * 호출자의 트랜잭션에 참여하며, 존재하지 않으면 ROOM_NOT_FOUND 예외를 던진다.
    * 이 메서드에서 별도 트랜잭션을 열거나 이벤트를 발행하지 않는다.
+   * 트랜잭션이 없는 호출은 IllegalTransactionStateException으로 거부한다.
    */
   void updateStatus(Long roomId, RoomStatus status);
 

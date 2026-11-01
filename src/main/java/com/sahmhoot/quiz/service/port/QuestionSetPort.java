@@ -16,6 +16,7 @@ public interface QuestionSetPort {
    * 문제 세트의 문항과 선택지를 회차의 run_questions, run_choices로 복사한다.
    * 복사된 문항 수를 반환하며, 문항이 없으면 0을 반환한다.
    * 호출자의 트랜잭션에 참여하며, 복사 실패 시 예외를 던져 전체를 롤백한다.
+   * 트랜잭션이 없는 호출은 IllegalTransactionStateException으로 거부한다.
    * 원본 orderNo와 제한 시간을 보존하고 문항은 READY로 생성한다. 이벤트는 발행하지 않는다.
    */
   int copyQuestionsToQuizRun(Long questionSetId, Long quizRunId);
