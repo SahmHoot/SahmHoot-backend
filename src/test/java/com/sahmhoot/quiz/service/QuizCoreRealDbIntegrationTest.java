@@ -392,6 +392,7 @@ class QuizCoreRealDbIntegrationTest {
     QuestionSetSnapshot qs = questionSetPort.getQuestionSet(QUESTION_SET_ID);
     assertThat(qs.id()).isEqualTo(QUESTION_SET_ID);
     assertThat(qs.hostId()).isEqualTo(HOST_USER_ID);
+    assertThat(qs.title()).isEqualTo("스택과 큐 퀴즈");
 
     // 없는 세트 예외
     assertThatThrownBy(() -> questionSetPort.getQuestionSet(9999L))
