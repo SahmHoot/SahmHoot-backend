@@ -40,6 +40,7 @@ import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -133,7 +134,8 @@ class QuizCoreTransactionIntegrationTest {
         RunChoiceRepository runChoiceRepository,
         QuizResultService quizResultService,
         RoomPort roomPort,
-        QuestionSetPort questionSetPort
+        QuestionSetPort questionSetPort,
+        ApplicationEventPublisher eventPublisher
     ) {
       return new QuizCoreTxService(
           quizRunRepository,
@@ -141,7 +143,8 @@ class QuizCoreTransactionIntegrationTest {
           runChoiceRepository,
           quizResultService,
           roomPort,
-          questionSetPort
+          questionSetPort,
+          eventPublisher
       );
     }
 

@@ -2,6 +2,13 @@ package com.sahmhoot.quiz.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.sahmhoot.quiz.exception.BusinessException;
 import com.sahmhoot.quiz.exception.ErrorCode;
@@ -10,6 +17,12 @@ import com.sahmhoot.quiz.dto.QuizResultResponse;
 import com.sahmhoot.quiz.dto.StartQuizRequest;
 import com.sahmhoot.quiz.dto.StartQuizResponse;
 import com.sahmhoot.quiz.dto.SubmitAnswerRequest;
+import com.sahmhoot.quiz.dto.message.QuestionOpenedMessage;
+import com.sahmhoot.quiz.dto.message.QuizCanceledMessage;
+import com.sahmhoot.quiz.dto.message.QuizMessage;
+import com.sahmhoot.quiz.dto.message.RoomWaitingMessage;
+import com.sahmhoot.quiz.event.QuizStateChangedEvent;
+import com.sahmhoot.quiz.lock.RoomLockManager;
 import com.sahmhoot.quiz.entity.QuizRun;
 import com.sahmhoot.quiz.entity.QuizRunStatus;
 import com.sahmhoot.quiz.entity.RunChoice;
@@ -27,6 +40,8 @@ import com.sahmhoot.quiz.service.port.RoomStatus;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
+import javax.sql.DataSource;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -34,7 +49,13 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * 실제 DB(sahmhoot_test) 기반 퀴즈 전체 라이프사이클 및 변경 저장 통합 테스트.
@@ -97,6 +118,26 @@ class QuizCoreRealDbIntegrationTest {
 
   @Autowired
   private AnswerRepository answerRepository;
+
+  @MockitoBean
+  private SimpMessagingTemplate messagingTemplate;
+
+  @Autowired
+  private ApplicationEventPublisher eventPublisher;
+
+  @Autowired
+  private PlatformTransactionManager transactionManager;
+
+  @Autowired
+  private RoomLockManager roomLockManager;
+
+  @Autowired
+  private DataSource dataSource;
+
+  @Autowired
+  private JsonMapper jsonMapper;
+
+  private static final String QUIZ_DESTINATION = "/topic/rooms/10/quiz";
 
   @BeforeEach
   void setUpData() {
@@ -340,6 +381,26 @@ class QuizCoreRealDbIntegrationTest {
     quizCoreService.closeResult(ROOM_ID, HOST_USER_ID);
     String roomStatusAfterClose = jdbcTemplate.queryForObject("SELECT status FROM rooms WHERE id = ?", String.class, ROOM_ID);
     assertThat(roomStatusAfterClose).isEqualTo("OPEN");
+
+    assertThatThrownBy(() -> quizCoreService.closeResult(ROOM_ID, HOST_USER_ID))
+        .isInstanceOf(BusinessException.class);
+    ArgumentCaptor<QuizMessage> messages = ArgumentCaptor.forClass(QuizMessage.class);
+    verify(messagingTemplate, times(6)).convertAndSend(eq(QUIZ_DESTINATION), messages.capture());
+    assertThat(messages.getAllValues()).extracting(QuizMessage::type).containsExactly(
+        "QUESTION_OPENED", "QUESTION_CLOSED", "QUESTION_OPENED", "QUESTION_CLOSED", "QUIZ_FINISHED", "ROOM_WAITING");
+    for (QuizMessage message : messages.getAllValues()) {
+      assertThat(message.sentAt()).isNotNull();
+      if (message instanceof QuestionOpenedMessage opened) {
+        var json = jsonMapper.valueToTree(opened);
+        assertThat(json.has("correctChoiceId")).isFalse();
+        for (var choiceJson : json.get("choices")) {
+          assertThat(choiceJson.has("correct")).isFalse();
+          assertThat(choiceJson.has("isCorrect")).isFalse();
+          assertThat(choiceJson.has("correctChoiceId")).isFalse();
+        }
+        assertThat(opened.choices()).hasSize(2);
+      }
+    }
   }
 
   @Test
@@ -361,6 +422,73 @@ class QuizCoreRealDbIntegrationTest {
     // DB 검증: quiz_runs 레코드도 롤백되어 저장되지 않아야 함
     Integer runCount = jdbcTemplate.queryForObject("SELECT count(*) FROM quiz_runs WHERE room_id = ?", Integer.class, ROOM_ID);
     assertThat(runCount).isEqualTo(0);
+    verifyNoInteractions(messagingTemplate);
+  }
+
+  @Test
+  @DisplayName("상태 변경이 다른 DB 연결에서도 커밋된 뒤, 같은 스레드의 방 잠금 안에서 발행한다")
+  void publishesAfterDatabaseCommitBeforeReleasingRoomLock() {
+    Thread caller = Thread.currentThread();
+    doAnswer(invocation -> {
+      assertThat(Thread.currentThread()).isSameAs(caller);
+      assertThat(roomLockManager.isLocked(ROOM_ID)).isTrue();
+      // 새 연결로 읽어 커밋 전의 같은 트랜잭션 값을 보는 테스트가 되지 않게 한다.
+      try (var connection = dataSource.getConnection();
+          var statement = connection.prepareStatement("SELECT status FROM rooms WHERE id = ?")) {
+        statement.setLong(1, ROOM_ID);
+        try (var result = statement.executeQuery()) {
+          assertThat(result.next()).isTrue();
+          assertThat(result.getString(1)).isEqualTo("PLAYING");
+        }
+      }
+      return null;
+    }).when(messagingTemplate).convertAndSend(eq(QUIZ_DESTINATION), any(Object.class));
+
+    quizCoreService.startQuiz(ROOM_ID, new StartQuizRequest(QUESTION_SET_ID), HOST_USER_ID);
+
+    verify(messagingTemplate).convertAndSend(eq(QUIZ_DESTINATION), any(QuestionOpenedMessage.class));
+    assertThat(roomLockManager.isLocked(ROOM_ID)).isFalse();
+  }
+
+  @Test
+  @DisplayName("이벤트를 준비한 후 트랜잭션이 롤백되면 메시지를 전송하지 않는다")
+  void rollbackAfterEventRegistrationDoesNotSend() {
+    roomLockManager.executeWithLock(ROOM_ID, () ->
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+          quizCoreTxService.startQuiz(ROOM_ID, new StartQuizRequest(QUESTION_SET_ID), HOST_USER_ID);
+          verifyNoInteractions(messagingTemplate);
+          status.setRollbackOnly();
+        }));
+
+    verifyNoInteractions(messagingTemplate);
+    assertThat(jdbcTemplate.queryForObject("SELECT status FROM rooms WHERE id = ?", String.class, ROOM_ID))
+        .isEqualTo("OPEN");
+    assertThat(quizRunRepository.findTopByRoomIdOrderByIdDesc(ROOM_ID)).isEmpty();
+  }
+
+  @Test
+  @DisplayName("트랜잭션 밖에서 준비한 이벤트는 발행하지 않는다")
+  void eventOutsideTransactionDoesNotSend() {
+    eventPublisher.publishEvent(new QuizStateChangedEvent(ROOM_ID, RoomWaitingMessage.of(Instant.now())));
+
+    verifyNoInteractions(messagingTemplate);
+  }
+
+  @Test
+  @DisplayName("퀴즈 중단은 한 번만 발행하고 중복 중단·종료 호출은 추가 메시지를 만들지 않는다")
+  void abortPublishesOnce() {
+    StartQuizResponse start = quizCoreService.startQuiz(ROOM_ID, new StartQuizRequest(QUESTION_SET_ID), HOST_USER_ID);
+    clearInvocations(messagingTemplate);
+
+    quizCoreService.abortQuiz(ROOM_ID, start.runId(), HOST_USER_ID);
+    assertThatThrownBy(() -> quizCoreService.abortQuiz(ROOM_ID, start.runId(), HOST_USER_ID))
+        .isInstanceOf(BusinessException.class);
+    assertThat(quizCoreService.finishQuiz(ROOM_ID, start.runId())).isNull();
+
+    ArgumentCaptor<QuizMessage> message = ArgumentCaptor.forClass(QuizMessage.class);
+    verify(messagingTemplate).convertAndSend(eq(QUIZ_DESTINATION), message.capture());
+    assertThat(message.getValue()).isInstanceOfSatisfying(QuizCanceledMessage.class,
+        canceled -> assertThat(canceled.runId()).isEqualTo(start.runId()));
   }
 
   @Test

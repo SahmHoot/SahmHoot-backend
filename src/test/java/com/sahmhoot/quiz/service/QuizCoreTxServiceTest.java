@@ -6,12 +6,20 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.sahmhoot.quiz.exception.BusinessException;
 import com.sahmhoot.quiz.exception.ErrorCode;
 import com.sahmhoot.quiz.dto.QuizResultResponse;
 import com.sahmhoot.quiz.dto.StartQuizRequest;
 import com.sahmhoot.quiz.dto.StartQuizResponse;
+import com.sahmhoot.quiz.dto.message.QuestionOpenedMessage;
+import com.sahmhoot.quiz.dto.message.QuestionClosedMessage;
+import com.sahmhoot.quiz.dto.message.QuizMessage;
+import com.sahmhoot.quiz.dto.message.QuizCanceledMessage;
+import com.sahmhoot.quiz.dto.message.QuizFinishedMessage;
+import com.sahmhoot.quiz.dto.message.RoomWaitingMessage;
+import com.sahmhoot.quiz.event.QuizStateChangedEvent;
 import com.sahmhoot.quiz.entity.QuestionType;
 import com.sahmhoot.quiz.entity.QuizRun;
 import com.sahmhoot.quiz.entity.QuizRunStatus;
@@ -34,7 +42,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 @ExtendWith(MockitoExtension.class)
 class QuizCoreTxServiceTest {
@@ -57,6 +67,9 @@ class QuizCoreTxServiceTest {
   @Mock
   private QuestionSetPort questionSetPort;
 
+  @Mock
+  private ApplicationEventPublisher eventPublisher;
+
   private QuizCoreTxService quizCoreTxService;
 
   @BeforeEach
@@ -67,7 +80,8 @@ class QuizCoreTxServiceTest {
         runChoiceRepository,
         quizResultService,
         roomPort,
-        questionSetPort
+        questionSetPort,
+        eventPublisher
     );
   }
 
@@ -85,6 +99,7 @@ class QuizCoreTxServiceTest {
         .isInstanceOf(BusinessException.class)
         .extracting(e -> ((BusinessException) e).getErrorCode())
         .isEqualTo(ErrorCode.FORBIDDEN);
+    verifyNoInteractions(eventPublisher);
   }
 
   @Test
@@ -178,6 +193,12 @@ class QuizCoreTxServiceTest {
     verify(roomPort).updateStatus(roomId, RoomStatus.PLAYING);
     verify(questionSetPort).copyQuestionsToQuizRun(questionSetId, 77L);
     verify(runQuestionRepository).save(q1);
+    assertThat(publishedMessage()).isInstanceOfSatisfying(QuestionOpenedMessage.class, message -> {
+      assertThat(message.runQuestionId()).isEqualTo(q1.getId());
+      assertThat(message.questionNo()).isEqualTo(1);
+      assertThat(message.totalQuestions()).isEqualTo(1);
+      assertThat(message.closesAt()).isEqualTo(response.closesAt());
+    });
   }
 
   @Test
@@ -239,6 +260,8 @@ class QuizCoreTxServiceTest {
 
     // rooms.status OPEN 복귀 검증
     verify(roomPort).updateStatus(roomId, RoomStatus.OPEN);
+    assertThat(publishedMessage()).isInstanceOfSatisfying(QuizCanceledMessage.class,
+        message -> assertThat(message.runId()).isEqualTo(runId));
   }
 
   @Test
@@ -260,6 +283,7 @@ class QuizCoreTxServiceTest {
     quizCoreTxService.closeResult(roomId, hostUserId);
 
     verify(roomPort).updateStatus(roomId, RoomStatus.OPEN);
+    assertThat(publishedMessage()).isInstanceOf(RoomWaitingMessage.class);
   }
 
   @Test
@@ -340,6 +364,12 @@ class QuizCoreTxServiceTest {
 
     // 결과 집계는 3초 뒤 finishQuiz에서 수행되므로 closeQuestion 중에는 호출되지 않아야 함
     verify(quizResultService, never()).aggregateResult(any());
+    assertThat(quizCoreTxService.closeQuestion(roomId, questionId).processed()).isFalse();
+    assertThat(publishedMessage()).isInstanceOfSatisfying(QuestionClosedMessage.class, message -> {
+      assertThat(message.correctChoiceId()).isEqualTo(result.correctChoiceId());
+      assertThat(message.isLast()).isTrue();
+      assertThat(message.nextOpensAt()).isEqualTo(result.nextOpensAt());
+    });
   }
 
   @Test
@@ -405,6 +435,8 @@ class QuizCoreTxServiceTest {
     QuizResultResponse expectedResult = new QuizResultResponse(List.of());
 
     given(quizRunRepository.findByIdAndRoomId(runId, roomId)).willReturn(Optional.of(runningRun));
+    given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(runId)).willReturn(List.of(
+        RunQuestion.builder().id(810L).status(RunQuestionStatus.CLOSED).build()));
     given(quizResultService.aggregateResult(runId)).willReturn(expectedResult);
 
     QuizResultResponse result = quizCoreTxService.finishQuiz(roomId, runId);
@@ -412,5 +444,50 @@ class QuizCoreTxServiceTest {
     assertThat(runningRun.getStatus()).isEqualTo(QuizRunStatus.FINISHED);
     assertThat(result).isEqualTo(expectedResult);
     verify(quizResultService).aggregateResult(runId);
+    assertThat(quizCoreTxService.finishQuiz(roomId, runId)).isNull();
+    assertThat(publishedMessage()).isInstanceOfSatisfying(QuizFinishedMessage.class,
+        message -> assertThat(message.result()).isEqualTo(expectedResult));
+  }
+
+  @Test
+  @DisplayName("openQuestion은 비연속 orderNo를 순번으로 변환하고 중복 호출 때 발행하지 않는다")
+  void openQuestion_publishesOnceWithSequentialQuestionNo() {
+    QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    RunQuestion first = RunQuestion.builder().id(810L).orderNo(3).status(RunQuestionStatus.CLOSED).build();
+    RunQuestion next = RunQuestion.builder().id(811L).quizRun(run).orderNo(7)
+        .status(RunQuestionStatus.READY).timeLimitSeconds(15).build();
+    given(quizRunRepository.findByIdAndRoomId(77L, 42L)).willReturn(Optional.of(run));
+    given(runQuestionRepository.findByQuizRunIdAndOrderNo(77L, 7)).willReturn(Optional.of(next));
+    given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(first, next));
+
+    quizCoreTxService.openQuestion(42L, 77L, 7);
+    quizCoreTxService.openQuestion(42L, 77L, 7);
+
+    assertThat(publishedMessage()).isInstanceOfSatisfying(QuestionOpenedMessage.class, message -> {
+      assertThat(message.questionNo()).isEqualTo(2);
+      assertThat(message.totalQuestions()).isEqualTo(2);
+    });
+  }
+
+  @Test
+  @DisplayName("열렸거나 아직 공개 전인 문항이 남으면 결과의 정답을 발행하지 않는다")
+  void finishQuiz_beforeAllQuestionsClose_doesNotPublishAnswers() {
+    QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    given(quizRunRepository.findByIdAndRoomId(77L, 42L)).willReturn(Optional.of(run));
+    for (RunQuestionStatus status : List.of(RunQuestionStatus.READY, RunQuestionStatus.OPEN)) {
+      given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(
+          RunQuestion.builder().status(status).build()));
+
+      assertThat(quizCoreTxService.finishQuiz(42L, 77L)).isNull();
+      assertThat(run.isRunning()).isTrue();
+    }
+    verifyNoInteractions(eventPublisher, quizResultService);
+  }
+
+  private QuizMessage publishedMessage() {
+    ArgumentCaptor<QuizStateChangedEvent> event = ArgumentCaptor.forClass(QuizStateChangedEvent.class);
+    verify(eventPublisher).publishEvent(event.capture());
+    assertThat(event.getValue().roomId()).isEqualTo(42L);
+    return event.getValue().message();
   }
 }
