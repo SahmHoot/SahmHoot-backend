@@ -13,6 +13,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * QuestionSetPort의 기본 구현체.
@@ -35,13 +37,14 @@ public class JdbcQuestionSetPort implements QuestionSetPort {
 
   @Override
   public QuestionSetSnapshot getQuestionSet(Long questionSetId) {
-    String sql = "SELECT id, host_id FROM question_sets WHERE id = ?";
+    String sql = "SELECT id, host_id, title FROM question_sets WHERE id = ?";
     try {
       return jdbcTemplate.queryForObject(
           sql,
           (rs, rowNum) -> new QuestionSetSnapshot(
               rs.getLong("id"),
-              rs.getLong("host_id")
+              rs.getLong("host_id"),
+              rs.getString("title")
           ),
           questionSetId
       );
@@ -52,6 +55,7 @@ public class JdbcQuestionSetPort implements QuestionSetPort {
   }
 
   @Override
+  @Transactional(propagation = Propagation.MANDATORY)
   public int copyQuestionsToQuizRun(Long questionSetId, Long quizRunId) {
     String questionSql = "SELECT id, type, content, time_limit_seconds, order_no FROM questions WHERE question_set_id = ? ORDER BY order_no ASC";
     List<Map<String, Object>> questions = jdbcTemplate.queryForList(questionSql, questionSetId);
