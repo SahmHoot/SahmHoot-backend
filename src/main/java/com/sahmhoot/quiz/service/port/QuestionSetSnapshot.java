@@ -6,5 +6,6 @@ package com.sahmhoot.quiz.service.port;
  */
 public record QuestionSetSnapshot(
     Long id,
-    Long hostId
+    Long hostId,
+    String title
 ) {}

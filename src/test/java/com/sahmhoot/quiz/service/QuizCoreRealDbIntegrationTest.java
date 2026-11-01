@@ -35,6 +35,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.IllegalTransactionStateException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 실제 DB(sahmhoot_test) 기반 퀴즈 전체 라이프사이클 및 변경 저장 통합 테스트.
@@ -97,6 +100,9 @@ class QuizCoreRealDbIntegrationTest {
 
   @Autowired
   private AnswerRepository answerRepository;
+
+  @Autowired
+  private PlatformTransactionManager transactionManager;
 
   @BeforeEach
   void setUpData() {
@@ -392,12 +398,50 @@ class QuizCoreRealDbIntegrationTest {
     QuestionSetSnapshot qs = questionSetPort.getQuestionSet(QUESTION_SET_ID);
     assertThat(qs.id()).isEqualTo(QUESTION_SET_ID);
     assertThat(qs.hostId()).isEqualTo(HOST_USER_ID);
+    assertThat(qs.title()).isEqualTo("스택과 큐 퀴즈");
 
     // 없는 세트 예외
     assertThatThrownBy(() -> questionSetPort.getQuestionSet(9999L))
         .isInstanceOf(BusinessException.class)
         .extracting(e -> ((BusinessException) e).getErrorCode())
         .isEqualTo(ErrorCode.QUESTION_SET_NOT_FOUND);
+  }
+
+  @Test
+  @DisplayName("RoomPort 상태 변경은 호출자 트랜잭션 없이는 실행하지 않고 롤백에 함께 참여한다")
+  void roomPortStatusUpdateRequiresCallerTransaction() {
+    assertThatThrownBy(() -> roomPort.updateStatus(ROOM_ID, RoomStatus.PLAYING))
+        .isInstanceOf(IllegalTransactionStateException.class);
+    assertThat(roomPort.getRoom(ROOM_ID).status()).isEqualTo(RoomStatus.OPEN);
+
+    new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+      roomPort.updateStatus(ROOM_ID, RoomStatus.PLAYING);
+      assertThat(roomPort.getRoom(ROOM_ID).status()).isEqualTo(RoomStatus.PLAYING);
+      status.setRollbackOnly();
+    });
+    assertThat(roomPort.getRoom(ROOM_ID).status()).isEqualTo(RoomStatus.OPEN);
+  }
+
+  @Test
+  @DisplayName("QuestionSetPort 복사는 호출자 트랜잭션 없이는 실행하지 않고 롤백에 함께 참여한다")
+  void questionSetCopyRequiresCallerTransaction() {
+    QuizRun run = quizRunRepository.saveAndFlush(QuizRun.builder()
+        .roomId(ROOM_ID).questionSetId(QUESTION_SET_ID).status(QuizRunStatus.RUNNING)
+        .startedAt(Instant.now()).build());
+
+    assertThatThrownBy(() -> questionSetPort.copyQuestionsToQuizRun(QUESTION_SET_ID, run.getId()))
+        .isInstanceOf(IllegalTransactionStateException.class);
+    assertThat(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(run.getId())).isEmpty();
+
+    new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+      assertThat(questionSetPort.copyQuestionsToQuizRun(QUESTION_SET_ID, run.getId())).isEqualTo(2);
+      assertThat(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(run.getId())).hasSize(2);
+      status.setRollbackOnly();
+    });
+    assertThat(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(run.getId())).isEmpty();
+    assertThat(jdbcTemplate.queryForObject(
+        "SELECT COUNT(*) FROM run_choices rc JOIN run_questions rq ON rc.run_question_id = rq.id WHERE rq.quiz_run_id = ?",
+        Integer.class, run.getId())).isZero();
   }
 
   @Test
