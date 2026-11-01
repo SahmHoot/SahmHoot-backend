@@ -35,13 +35,14 @@ public class JdbcQuestionSetPort implements QuestionSetPort {
 
   @Override
   public QuestionSetSnapshot getQuestionSet(Long questionSetId) {
-    String sql = "SELECT id, host_id FROM question_sets WHERE id = ?";
+    String sql = "SELECT id, host_id, title FROM question_sets WHERE id = ?";
     try {
       return jdbcTemplate.queryForObject(
           sql,
           (rs, rowNum) -> new QuestionSetSnapshot(
               rs.getLong("id"),
-              rs.getLong("host_id")
+              rs.getLong("host_id"),
+              rs.getString("title")
           ),
           questionSetId
       );
