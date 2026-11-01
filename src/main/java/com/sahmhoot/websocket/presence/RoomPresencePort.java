@@ -8,7 +8,8 @@ public interface RoomPresencePort {
 
   /**
    * 방의 사용자 집합과 소유자 연결 유무를 같은 시점의 불변 스냅샷으로 반환한다.
-   * 집합은 users.id이며 소유자도 포함한다. 여러 탭은 한 사용자로 합친다.
+   * 집합은 users.id이며 접속 중인 소유자도 포함한다. 여러 탭은 한 사용자로 합친다.
+   * 제공자는 ownerOnline을 onlineUserIds.contains(해당 방의 hostId)와 일치시켜야 한다.
    * 구독 세션이 없으면 빈 집합과 ownerOnline=false를 반환하고, null은 반환하지 않는다.
    * 방의 존재·상태·참가 권한 검증은 소비자가 담당한다.
    */
