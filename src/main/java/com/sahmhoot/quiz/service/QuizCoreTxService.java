@@ -225,12 +225,18 @@ public class QuizCoreTxService {
       return;
     }
 
+    List<RunQuestion> questions = runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(runId);
+    int questionIndex = findQuestionIndex(questions, question.getId());
+    if (questions.stream().anyMatch(RunQuestion::isOpen)
+        || questions.subList(0, questionIndex).stream().anyMatch(previous -> !previous.isClosed())) {
+      return;
+    }
+
     Instant now = Instant.now();
     Instant closesAt = now.plus(Duration.ofSeconds(question.getTimeLimitSeconds()));
     question.open(now, closesAt);
     runQuestionRepository.save(question);
-    List<RunQuestion> questions = runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(runId);
-    publishQuestionOpened(quizRun, question, findQuestionIndex(questions, question.getId()) + 1, questions.size());
+    publishQuestionOpened(quizRun, question, questionIndex + 1, questions.size());
     log.info("Opened runQuestionId={} (orderNo={}) until {}", question.getId(), orderNo, closesAt);
   }
 
