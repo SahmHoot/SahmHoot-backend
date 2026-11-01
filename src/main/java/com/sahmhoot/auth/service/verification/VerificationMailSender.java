@@ -1,4 +1,4 @@
-package com.sahmhoot.auth.verification;
+package com.sahmhoot.auth.service.verification;
 
 import com.sahmhoot.auth.exception.ApiException;
 import com.sahmhoot.auth.exception.ErrorCode;

@@ -1,6 +1,6 @@
 package com.sahmhoot.auth.dto;
 
-import com.sahmhoot.user.Role;
+import com.sahmhoot.user.entity.Role;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;

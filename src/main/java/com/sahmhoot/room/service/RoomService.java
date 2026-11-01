@@ -1,15 +1,21 @@
-package com.sahmhoot.room;
+package com.sahmhoot.room.service;
 
 import com.sahmhoot.auth.exception.ApiException;
 import com.sahmhoot.auth.exception.ErrorCode;
-import com.sahmhoot.user.Role;
-import com.sahmhoot.user.UserRepository;
+import com.sahmhoot.room.dto.CreateRoomRequest;
+import com.sahmhoot.room.dto.CreateRoomResponse;
+import com.sahmhoot.room.entity.Room;
+import com.sahmhoot.room.entity.RoomParticipant;
+import com.sahmhoot.room.repository.RoomParticipantRepository;
+import com.sahmhoot.room.repository.RoomRepository;
+import com.sahmhoot.user.entity.Role;
+import com.sahmhoot.user.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.web.util.UriComponentsBuilder;
 
 @Service

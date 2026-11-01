@@ -1,11 +1,12 @@
-package com.sahmhoot.auth;
+package com.sahmhoot.auth.controller;
 
 import com.sahmhoot.auth.dto.AuthResponse;
 import com.sahmhoot.auth.dto.EmailConfirmRequest;
 import com.sahmhoot.auth.dto.EmailRequest;
 import com.sahmhoot.auth.dto.LoginRequest;
 import com.sahmhoot.auth.dto.SignupRequest;
-import com.sahmhoot.auth.verification.EmailVerificationService;
+import com.sahmhoot.auth.service.AuthService;
+import com.sahmhoot.auth.service.verification.EmailVerificationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;

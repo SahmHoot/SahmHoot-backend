@@ -9,18 +9,23 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.jayway.jsonpath.JsonPath;
 import com.sahmhoot.auth.jwt.JwtProvider;
-import com.sahmhoot.user.Role;
-import com.sahmhoot.user.User;
-import com.sahmhoot.user.UserRepository;
+import com.sahmhoot.room.entity.Room;
+import com.sahmhoot.room.entity.RoomParticipant;
+import com.sahmhoot.room.repository.RoomParticipantRepository;
+import com.sahmhoot.room.repository.RoomRepository;
+import com.sahmhoot.room.service.JoinCodeGenerator;
+import com.sahmhoot.user.entity.Role;
+import com.sahmhoot.user.entity.User;
+import com.sahmhoot.user.repository.UserRepository;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 import org.junit.jupiter.api.*;
-import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;

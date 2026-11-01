@@ -2,10 +2,10 @@ package com.sahmhoot.websocket;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.sahmhoot.auth.AuthUser;
+import com.sahmhoot.auth.dto.AuthUser;
 import com.sahmhoot.auth.jwt.JwtProperties;
 import com.sahmhoot.auth.jwt.JwtProvider;
-import com.sahmhoot.user.Role;
+import com.sahmhoot.user.entity.Role;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;

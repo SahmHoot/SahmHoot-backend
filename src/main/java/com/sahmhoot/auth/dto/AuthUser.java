@@ -1,6 +1,6 @@
-package com.sahmhoot.auth;
+package com.sahmhoot.auth.dto;
 
-import com.sahmhoot.user.Role;
+import com.sahmhoot.user.entity.Role;
 import java.security.Principal;
 
 /**

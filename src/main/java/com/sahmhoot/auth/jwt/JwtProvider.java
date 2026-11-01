@@ -1,7 +1,7 @@
 package com.sahmhoot.auth.jwt;
 
-import com.sahmhoot.auth.AuthUser;
-import com.sahmhoot.user.Role;
+import com.sahmhoot.auth.dto.AuthUser;
+import com.sahmhoot.user.entity.Role;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;

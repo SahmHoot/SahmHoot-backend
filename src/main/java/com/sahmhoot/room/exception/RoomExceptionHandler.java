@@ -1,14 +1,15 @@
-package com.sahmhoot.room;
+package com.sahmhoot.room.exception;
 
 import com.sahmhoot.auth.exception.ApiException;
 import com.sahmhoot.auth.exception.ErrorCode;
 import com.sahmhoot.auth.exception.ErrorResponse;
+import com.sahmhoot.room.controller.RoomController;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
-import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 
 @Slf4j
 @RestControllerAdvice(assignableTypes = RoomController.class)

@@ -1,6 +1,6 @@
 package com.sahmhoot.auth.dto;
 
-import com.sahmhoot.user.UserResponse;
+import com.sahmhoot.user.dto.UserResponse;
 import java.time.Instant;
 
 /** 05-3·05-4 응답: { accessToken, expiresAt, user }. */

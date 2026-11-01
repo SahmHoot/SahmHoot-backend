@@ -1,7 +1,7 @@
 package com.sahmhoot.auth.exception;
 
-import com.sahmhoot.auth.AuthController;
-import com.sahmhoot.user.UserController;
+import com.sahmhoot.auth.controller.AuthController;
+import com.sahmhoot.user.controller.UserController;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;

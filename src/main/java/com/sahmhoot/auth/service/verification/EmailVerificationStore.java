@@ -1,4 +1,4 @@
-package com.sahmhoot.auth.verification;
+package com.sahmhoot.auth.service.verification;
 
 import java.time.Instant;
 import java.util.Map;

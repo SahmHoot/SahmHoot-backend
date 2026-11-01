@@ -1,4 +1,4 @@
-package com.sahmhoot.room;
+package com.sahmhoot.room.entity;
 
 import jakarta.persistence.*;
 import java.time.Instant;
