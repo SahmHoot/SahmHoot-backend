@@ -18,6 +18,7 @@ import com.sahmhoot.quiz.dto.StartQuizRequest;
 import com.sahmhoot.quiz.dto.StartQuizResponse;
 import com.sahmhoot.quiz.dto.SubmitAnswerRequest;
 import com.sahmhoot.quiz.dto.message.QuestionOpenedMessage;
+import com.sahmhoot.quiz.dto.message.QuestionClosedMessage;
 import com.sahmhoot.quiz.dto.message.QuizCanceledMessage;
 import com.sahmhoot.quiz.dto.message.QuizMessage;
 import com.sahmhoot.quiz.dto.message.RoomWaitingMessage;
@@ -39,6 +40,7 @@ import com.sahmhoot.quiz.service.port.RoomSnapshot;
 import com.sahmhoot.quiz.service.port.RoomStatus;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import javax.sql.DataSource;
 import org.mockito.ArgumentCaptor;
@@ -242,6 +244,14 @@ class QuizCoreRealDbIntegrationTest {
   @Test
   @DisplayName("실제 DB: 퀴즈 시작 -> 문항 열기 -> 답안 제출/수정 -> 문항 마감 -> 퀴즈 종료 -> 결과 집계 -> 대기 복귀 전체 흐름 검증")
   void fullQuizLifecycle_persistsCorrectlyInRealDb() {
+    List<QuizMessage> sentMessages = new ArrayList<>();
+    List<Boolean> locksAtSend = new ArrayList<>();
+    doAnswer(invocation -> {
+      sentMessages.add(invocation.getArgument(1, QuizMessage.class));
+      locksAtSend.add(roomLockManager.isLocked(ROOM_ID));
+      return null;
+    }).when(messagingTemplate).convertAndSend(eq(QUIZ_DESTINATION), any(Object.class));
+
     // 1. 퀴즈 시작 (startQuiz)
     StartQuizResponse startResponse = quizCoreService.startQuiz(
         ROOM_ID,
@@ -323,10 +333,10 @@ class QuizCoreRealDbIntegrationTest {
     assertThat(p2ChoiceId).isEqualTo(stackChoice.getId());
 
     // 3. 1번 문항 마감 (closeQuestion)
-    CloseQuestionResult closeResult1 = quizCoreTxService.closeQuestion(ROOM_ID, q1.getId());
-    assertThat(closeResult1.processed()).isTrue();
+    quizCoreService.closeQuestion(ROOM_ID, q1.getId());
+    quizCoreService.closeQuestion(ROOM_ID, q1.getId());
+    QuestionClosedMessage closeResult1 = (QuestionClosedMessage) sentMessages.getLast();
     assertThat(closeResult1.isLast()).isFalse();
-    assertThat(closeResult1.nextOrderNo()).isEqualTo(2);
     assertThat(closeResult1.correctChoiceId()).isEqualTo(stackChoice.getId());
 
     // DB 검증: 1번 문항 status = CLOSED, closed_at 기록
@@ -338,7 +348,8 @@ class QuizCoreRealDbIntegrationTest {
     assertThat(runStatusAfterQ1).isEqualTo("RUNNING");
 
     // 4. 2번 문항 열기 (openQuestion) 및 답안 제출
-    quizCoreTxService.openQuestion(ROOM_ID, runId, 2);
+    quizCoreService.openQuestion(ROOM_ID, runId, 2);
+    quizCoreService.openQuestion(ROOM_ID, runId, 2);
     String q2DbStatus = jdbcTemplate.queryForObject("SELECT status FROM run_questions WHERE id = ?", String.class, q2.getId());
     assertThat(q2DbStatus).isEqualTo("OPEN");
 
@@ -351,14 +362,15 @@ class QuizCoreRealDbIntegrationTest {
     answerService.submitAnswer(ROOM_ID, PARTICIPANT_2_ID, new SubmitAnswerRequest(q2.getId(), q2Incorrect.getId()), java.util.Set.of());
 
     // 2번 문항 마감 (마지막 문항)
-    CloseQuestionResult closeResult2 = quizCoreTxService.closeQuestion(ROOM_ID, q2.getId());
+    quizCoreService.closeQuestion(ROOM_ID, q2.getId());
+    QuestionClosedMessage closeResult2 = (QuestionClosedMessage) sentMessages.getLast();
     assertThat(closeResult2.isLast()).isTrue();
-    assertThat(closeResult2.nextOrderNo()).isNull();
 
     // 5. 퀴즈 종료 및 결과 집계 (finishQuiz)
-    QuizResultResponse finalResult = quizCoreTxService.finishQuiz(ROOM_ID, runId);
+    QuizResultResponse finalResult = quizCoreService.finishQuiz(ROOM_ID, runId);
     assertThat(finalResult).isNotNull();
     assertThat(finalResult.questions()).hasSize(2);
+    assertThat(quizCoreService.finishQuiz(ROOM_ID, runId)).isNull();
 
     // DB 검증: 회차 FINISHED, 방 상태는 결과 화면 동안 PLAYING 유지
     String finishedRunStatus = jdbcTemplate.queryForObject("SELECT status FROM quiz_runs WHERE id = ?", String.class, runId);
@@ -384,11 +396,11 @@ class QuizCoreRealDbIntegrationTest {
 
     assertThatThrownBy(() -> quizCoreService.closeResult(ROOM_ID, HOST_USER_ID))
         .isInstanceOf(BusinessException.class);
-    ArgumentCaptor<QuizMessage> messages = ArgumentCaptor.forClass(QuizMessage.class);
-    verify(messagingTemplate, times(6)).convertAndSend(eq(QUIZ_DESTINATION), messages.capture());
-    assertThat(messages.getAllValues()).extracting(QuizMessage::type).containsExactly(
+    verify(messagingTemplate, times(6)).convertAndSend(eq(QUIZ_DESTINATION), any(QuizMessage.class));
+    assertThat(locksAtSend).containsExactly(true, true, true, true, true, true);
+    assertThat(sentMessages).extracting(QuizMessage::type).containsExactly(
         "QUESTION_OPENED", "QUESTION_CLOSED", "QUESTION_OPENED", "QUESTION_CLOSED", "QUIZ_FINISHED", "ROOM_WAITING");
-    for (QuizMessage message : messages.getAllValues()) {
+    for (QuizMessage message : sentMessages) {
       assertThat(message.sentAt()).isNotNull();
       if (message instanceof QuestionOpenedMessage opened) {
         var json = jsonMapper.valueToTree(opened);
@@ -429,16 +441,20 @@ class QuizCoreRealDbIntegrationTest {
   @DisplayName("상태 변경이 다른 DB 연결에서도 커밋된 뒤, 같은 스레드의 방 잠금 안에서 발행한다")
   void publishesAfterDatabaseCommitBeforeReleasingRoomLock() {
     Thread caller = Thread.currentThread();
+    List<Thread> sendingThreads = new ArrayList<>();
+    List<Boolean> locksAtSend = new ArrayList<>();
+    List<String> committedStatuses = new ArrayList<>();
     doAnswer(invocation -> {
-      assertThat(Thread.currentThread()).isSameAs(caller);
-      assertThat(roomLockManager.isLocked(ROOM_ID)).isTrue();
+      sendingThreads.add(Thread.currentThread());
+      locksAtSend.add(roomLockManager.isLocked(ROOM_ID));
       // 새 연결로 읽어 커밋 전의 같은 트랜잭션 값을 보는 테스트가 되지 않게 한다.
       try (var connection = dataSource.getConnection();
           var statement = connection.prepareStatement("SELECT status FROM rooms WHERE id = ?")) {
         statement.setLong(1, ROOM_ID);
         try (var result = statement.executeQuery()) {
-          assertThat(result.next()).isTrue();
-          assertThat(result.getString(1)).isEqualTo("PLAYING");
+          if (result.next()) {
+            committedStatuses.add(result.getString(1));
+          }
         }
       }
       return null;
@@ -447,6 +463,10 @@ class QuizCoreRealDbIntegrationTest {
     quizCoreService.startQuiz(ROOM_ID, new StartQuizRequest(QUESTION_SET_ID), HOST_USER_ID);
 
     verify(messagingTemplate).convertAndSend(eq(QUIZ_DESTINATION), any(QuestionOpenedMessage.class));
+    // AFTER_COMMIT 콜백 안의 예외는 프레임워크에 로깅될 수 있으므로 관찰한 값을 밖에서 검증한다.
+    assertThat(sendingThreads).containsExactly(caller);
+    assertThat(locksAtSend).containsExactly(true);
+    assertThat(committedStatuses).containsExactly("PLAYING");
     assertThat(roomLockManager.isLocked(ROOM_ID)).isFalse();
   }
 
@@ -455,7 +475,7 @@ class QuizCoreRealDbIntegrationTest {
   void rollbackAfterEventRegistrationDoesNotSend() {
     roomLockManager.executeWithLock(ROOM_ID, () ->
         new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
-          quizCoreTxService.startQuiz(ROOM_ID, new StartQuizRequest(QUESTION_SET_ID), HOST_USER_ID);
+          quizCoreService.startQuiz(ROOM_ID, new StartQuizRequest(QUESTION_SET_ID), HOST_USER_ID);
           verifyNoInteractions(messagingTemplate);
           status.setRollbackOnly();
         }));
@@ -464,6 +484,20 @@ class QuizCoreRealDbIntegrationTest {
     assertThat(jdbcTemplate.queryForObject("SELECT status FROM rooms WHERE id = ?", String.class, ROOM_ID))
         .isEqualTo("OPEN");
     assertThat(quizRunRepository.findTopByRoomIdOrderByIdDesc(ROOM_ID)).isEmpty();
+  }
+
+  @Test
+  @DisplayName("외부 트랜잭션에 참여해 커밋·발행이 방 잠금 해제 후로 밀리는 호출을 거부한다")
+  void outerTransactionCannotDeferPublishingBeyondRoomLock() {
+    new TransactionTemplate(transactionManager).executeWithoutResult(status ->
+        assertThatThrownBy(() -> quizCoreService.startQuiz(
+            ROOM_ID, new StartQuizRequest(QUESTION_SET_ID), HOST_USER_ID))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("before starting a transaction"));
+
+    verifyNoInteractions(messagingTemplate);
+    assertThat(quizRunRepository.findTopByRoomIdOrderByIdDesc(ROOM_ID)).isEmpty();
+    assertThat(roomLockManager.isLocked(ROOM_ID)).isFalse();
   }
 
   @Test

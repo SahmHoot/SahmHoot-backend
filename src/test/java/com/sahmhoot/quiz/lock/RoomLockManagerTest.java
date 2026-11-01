@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 class RoomLockManagerTest {
 
@@ -135,5 +136,40 @@ class RoomLockManagerTest {
     assertThatThrownBy(() -> lockManager.executeWithLock(null, () -> {}))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("roomId must not be null");
+  }
+
+  @Test
+  @DisplayName("잠금을 잡기 전에 시작한 트랜잭션에서는 두 실행 방식 모두 작업을 거부한다")
+  void transactionCannotStartBeforeRoomLock() {
+    AtomicBoolean executed = new AtomicBoolean(false);
+    TransactionSynchronizationManager.setActualTransactionActive(true);
+    try {
+      assertThatThrownBy(() -> lockManager.executeWithLock(42L, () -> "unexpected"))
+          .isInstanceOf(IllegalStateException.class);
+      assertThatThrownBy(() -> lockManager.executeWithLock(42L, () -> {
+        executed.set(true);
+      })).isInstanceOf(IllegalStateException.class);
+      assertThat(executed).isFalse();
+      assertThat(lockManager.isLocked(42L)).isFalse();
+    } finally {
+      TransactionSynchronizationManager.setActualTransactionActive(false);
+    }
+  }
+
+  @Test
+  @DisplayName("방 잠금 안에서 시작한 트랜잭션은 같은 잠금에 재진입할 수 있다")
+  void transactionInsideExistingRoomLockAllowsReentry() {
+    lockManager.executeWithLock(42L, () -> {
+      TransactionSynchronizationManager.setActualTransactionActive(true);
+      try {
+        assertThat(lockManager.executeWithLock(42L, () -> "nested")).isEqualTo("nested");
+        lockManager.executeWithLock(42L, () -> {
+          assertThat(lockManager.isLocked(42L)).isTrue();
+        });
+      } finally {
+        TransactionSynchronizationManager.setActualTransactionActive(false);
+      }
+    });
+    assertThat(lockManager.isLocked(42L)).isFalse();
   }
 }

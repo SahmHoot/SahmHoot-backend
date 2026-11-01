@@ -470,6 +470,35 @@ class QuizCoreTxServiceTest {
   }
 
   @Test
+  @DisplayName("이전 문항이 열려 있거나 앞 문항을 건너뛴 호출은 다음 문항을 열거나 발행하지 않는다")
+  void openQuestion_cannotOverlapOrSkipQuestions() {
+    QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    RunQuestion first = RunQuestion.builder().id(810L).orderNo(1).status(RunQuestionStatus.OPEN).build();
+    RunQuestion second = RunQuestion.builder().id(811L).quizRun(run).orderNo(2)
+        .status(RunQuestionStatus.READY).timeLimitSeconds(15).build();
+    RunQuestion third = RunQuestion.builder().id(812L).quizRun(run).orderNo(3)
+        .status(RunQuestionStatus.READY).timeLimitSeconds(15).build();
+    given(quizRunRepository.findByIdAndRoomId(77L, 42L)).willReturn(Optional.of(run));
+    given(runQuestionRepository.findByQuizRunIdAndOrderNo(77L, 2)).willReturn(Optional.of(second));
+    given(runQuestionRepository.findByQuizRunIdAndOrderNo(77L, 3)).willReturn(Optional.of(third));
+    given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(first, second, third));
+
+    quizCoreTxService.openQuestion(42L, 77L, 2);
+    assertThat(second.isReady()).isTrue();
+    verifyNoInteractions(eventPublisher);
+
+    first.close(Instant.now());
+    quizCoreTxService.openQuestion(42L, 77L, 3);
+    assertThat(third.isReady()).isTrue();
+    verifyNoInteractions(eventPublisher);
+
+    quizCoreTxService.openQuestion(42L, 77L, 2);
+    assertThat(second.isOpen()).isTrue();
+    assertThat(publishedMessage()).isInstanceOfSatisfying(QuestionOpenedMessage.class,
+        message -> assertThat(message.questionNo()).isEqualTo(2));
+  }
+
+  @Test
   @DisplayName("열렸거나 아직 공개 전인 문항이 남으면 결과의 정답을 발행하지 않는다")
   void finishQuiz_beforeAllQuestionsClose_doesNotPublishAnswers() {
     QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
