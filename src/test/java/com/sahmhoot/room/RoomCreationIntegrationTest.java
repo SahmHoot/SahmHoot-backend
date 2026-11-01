@@ -9,6 +9,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.jayway.jsonpath.JsonPath;
 import com.sahmhoot.auth.jwt.JwtProvider;
+import com.sahmhoot.room.entity.Room;
+import com.sahmhoot.room.entity.RoomParticipant;
+import com.sahmhoot.room.repository.RoomParticipantRepository;
+import com.sahmhoot.room.repository.RoomRepository;
+import com.sahmhoot.room.service.JoinCodeGenerator;
 import com.sahmhoot.user.Role;
 import com.sahmhoot.user.User;
 import com.sahmhoot.user.UserRepository;

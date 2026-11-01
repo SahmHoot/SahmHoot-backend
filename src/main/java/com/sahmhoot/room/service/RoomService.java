@@ -1,7 +1,13 @@
-package com.sahmhoot.room;
+package com.sahmhoot.room.service;
 
 import com.sahmhoot.auth.exception.ApiException;
 import com.sahmhoot.auth.exception.ErrorCode;
+import com.sahmhoot.room.dto.CreateRoomRequest;
+import com.sahmhoot.room.dto.CreateRoomResponse;
+import com.sahmhoot.room.entity.Room;
+import com.sahmhoot.room.entity.RoomParticipant;
+import com.sahmhoot.room.repository.RoomParticipantRepository;
+import com.sahmhoot.room.repository.RoomRepository;
 import com.sahmhoot.user.Role;
 import com.sahmhoot.user.UserRepository;
 import org.springframework.beans.factory.annotation.Value;

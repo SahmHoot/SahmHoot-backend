@@ -1,6 +1,9 @@
-package com.sahmhoot.room;
+package com.sahmhoot.room.controller;
 
 import com.sahmhoot.auth.AuthUser;
+import com.sahmhoot.room.dto.CreateRoomRequest;
+import com.sahmhoot.room.dto.CreateRoomResponse;
+import com.sahmhoot.room.service.RoomService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;

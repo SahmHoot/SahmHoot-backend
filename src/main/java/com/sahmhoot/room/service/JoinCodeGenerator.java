@@ -1,4 +1,4 @@
-package com.sahmhoot.room;
+package com.sahmhoot.room.service;
 
 import java.security.SecureRandom;
 import java.util.Locale;
