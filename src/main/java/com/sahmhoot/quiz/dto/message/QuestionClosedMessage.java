@@ -13,7 +13,7 @@ public record QuestionClosedMessage(
     Long correctChoiceId,
     boolean isLast,
     Instant nextOpensAt
-) {
+) implements QuizMessage {
 
   public static QuestionClosedMessage of(
       Long runId,

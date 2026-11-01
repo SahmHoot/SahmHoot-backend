@@ -19,7 +19,11 @@ public record QuestionOpenedMessage(
     int timeLimitSeconds,
     Instant closesAt,
     List<RunChoiceDetail> choices
-) {
+) implements QuizMessage {
+
+  public QuestionOpenedMessage {
+    choices = List.copyOf(choices);
+  }
 
   public static QuestionOpenedMessage of(
       Long runId,
