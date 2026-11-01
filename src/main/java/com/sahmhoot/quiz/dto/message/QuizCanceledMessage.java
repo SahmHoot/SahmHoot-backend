@@ -9,7 +9,7 @@ public record QuizCanceledMessage(
     String type,
     Instant sentAt,
     Long runId
-) {
+) implements QuizMessage {
 
   public static QuizCanceledMessage of(Long runId, Instant sentAt) {
     return new QuizCanceledMessage("QUIZ_CANCELED", sentAt, runId);

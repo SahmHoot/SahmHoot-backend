@@ -8,7 +8,7 @@ import java.time.Instant;
 public record RoomWaitingMessage(
     String type,
     Instant sentAt
-) {
+) implements QuizMessage {
 
   public static RoomWaitingMessage of(Instant sentAt) {
     return new RoomWaitingMessage("ROOM_WAITING", sentAt);

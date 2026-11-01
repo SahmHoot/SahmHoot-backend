@@ -5,11 +5,18 @@ import com.sahmhoot.quiz.exception.ErrorCode;
 import com.sahmhoot.quiz.dto.QuizResultResponse;
 import com.sahmhoot.quiz.dto.StartQuizRequest;
 import com.sahmhoot.quiz.dto.StartQuizResponse;
+import com.sahmhoot.quiz.dto.message.QuestionClosedMessage;
+import com.sahmhoot.quiz.dto.message.QuestionOpenedMessage;
+import com.sahmhoot.quiz.dto.message.QuizCanceledMessage;
+import com.sahmhoot.quiz.dto.message.QuizFinishedMessage;
+import com.sahmhoot.quiz.dto.message.RoomWaitingMessage;
+import com.sahmhoot.quiz.dto.message.RunChoiceDetail;
 import com.sahmhoot.quiz.entity.QuizRun;
 import com.sahmhoot.quiz.entity.QuizRunStatus;
 import com.sahmhoot.quiz.entity.RunChoice;
 import com.sahmhoot.quiz.entity.RunQuestion;
 import com.sahmhoot.quiz.entity.RunQuestionStatus;
+import com.sahmhoot.quiz.event.QuizStateChangedEvent;
 import com.sahmhoot.quiz.repository.QuizRunRepository;
 import com.sahmhoot.quiz.repository.RunChoiceRepository;
 import com.sahmhoot.quiz.repository.RunQuestionRepository;
@@ -23,6 +30,7 @@ import java.time.Instant;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -42,6 +50,7 @@ public class QuizCoreTxService {
   private final QuizResultService quizResultService;
   private final RoomPort roomPort;
   private final QuestionSetPort questionSetPort;
+  private final ApplicationEventPublisher eventPublisher;
 
   /**
    * 퀴즈 시작 트랜잭션.
@@ -92,6 +101,7 @@ public class QuizCoreTxService {
 
     // 방 상태를 OPEN(대기)으로 복귀
     roomPort.updateStatus(roomId, RoomStatus.OPEN);
+    eventPublisher.publishEvent(new QuizStateChangedEvent(roomId, QuizCanceledMessage.of(runId, now)));
 
     log.info("Aborted quiz runId={} for roomId={}", runId, roomId);
   }
@@ -113,6 +123,7 @@ public class QuizCoreTxService {
 
     // 방 상태를 OPEN(대기)으로 복귀
     roomPort.updateStatus(roomId, RoomStatus.OPEN);
+    eventPublisher.publishEvent(new QuizStateChangedEvent(roomId, RoomWaitingMessage.of(Instant.now())));
     log.info("Closed quiz result for roomId={}, runId={}, returned to OPEN", roomId, latestRun.getId());
   }
 
@@ -151,7 +162,7 @@ public class QuizCoreTxService {
         : null;
 
     Instant nextOpensAt = actualClosedAt.plusSeconds(3);
-    return CloseQuestionResult.closed(
+    CloseQuestionResult result = CloseQuestionResult.closed(
         quizRun.getId(),
         question.getId(),
         findCorrectChoiceId(question.getId()),
@@ -160,6 +171,10 @@ public class QuizCoreTxService {
         nextOpensAt,
         actualClosedAt
     );
+    eventPublisher.publishEvent(new QuizStateChangedEvent(roomId, QuestionClosedMessage.of(
+        result.runId(), result.runQuestionId(), result.correctChoiceId(), result.isLast(),
+        result.nextOpensAt(), now)));
+    return result;
   }
 
   /**
@@ -175,12 +190,18 @@ public class QuizCoreTxService {
       return null;
     }
 
+    List<RunQuestion> questions = runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(runId);
+    if (questions.isEmpty() || questions.stream().anyMatch(question -> !question.isClosed())) {
+      return null;
+    }
+
     Instant now = Instant.now();
     quizRun.finish(now);
     quizRunRepository.save(quizRun);
 
     // rooms.status는 결과 화면 동안 PLAYING 유지 (실시간 규격 120행)
     QuizResultResponse result = quizResultService.aggregateResult(quizRun.getId());
+    eventPublisher.publishEvent(new QuizStateChangedEvent(roomId, QuizFinishedMessage.of(runId, result, now)));
     log.info("Finished quiz runId={} for roomId={}, result aggregated", runId, roomId);
     return result;
   }
@@ -208,6 +229,8 @@ public class QuizCoreTxService {
     Instant closesAt = now.plus(Duration.ofSeconds(question.getTimeLimitSeconds()));
     question.open(now, closesAt);
     runQuestionRepository.save(question);
+    List<RunQuestion> questions = runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(runId);
+    publishQuestionOpened(quizRun, question, findQuestionIndex(questions, question.getId()) + 1, questions.size());
     log.info("Opened runQuestionId={} (orderNo={}) until {}", question.getId(), orderNo, closesAt);
   }
 
@@ -248,6 +271,7 @@ public class QuizCoreTxService {
     Instant closesAt = openedAt.plus(Duration.ofSeconds(firstQuestion.getTimeLimitSeconds()));
     firstQuestion.open(openedAt, closesAt);
     runQuestionRepository.save(firstQuestion);
+    publishQuestionOpened(quizRun, firstQuestion, 1, questions.size());
     return new StartQuizResponse(quizRun.getId(), questions.size(), firstQuestion.getId(), closesAt);
   }
 
@@ -257,7 +281,18 @@ public class QuizCoreTxService {
         return i;
       }
     }
-    throw new IllegalStateException("Closed question is missing from its quiz run: " + questionId);
+    throw new IllegalStateException("Question is missing from its quiz run: " + questionId);
+  }
+
+  private void publishQuestionOpened(QuizRun quizRun, RunQuestion question, int questionNo, int totalQuestions) {
+    List<RunChoiceDetail> choices = runChoiceRepository.findByRunQuestionIdOrderByOrderNoAsc(question.getId())
+        .stream()
+        .map(choice -> new RunChoiceDetail(choice.getId(), choice.getOrderNo(), choice.getContent()))
+        .toList();
+    QuestionOpenedMessage message = QuestionOpenedMessage.of(
+        quizRun.getId(), question.getId(), questionNo, totalQuestions, question.getType(), question.getContent(),
+        question.getTimeLimitSeconds(), question.getClosesAt(), choices, Instant.now());
+    eventPublisher.publishEvent(new QuizStateChangedEvent(quizRun.getRoomId(), message));
   }
 
   private Long findCorrectChoiceId(Long questionId) {

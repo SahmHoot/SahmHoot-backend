@@ -27,7 +27,6 @@ public class QuizCoreService {
   public StartQuizResponse startQuiz(Long roomId, StartQuizRequest request, Long hostUserId) {
     return roomLockManager.executeWithLock(roomId, () -> {
       StartQuizResponse response = quizCoreTxService.startQuiz(roomId, request, hostUserId);
-      // TODO: 실시간 QUESTION_OPENED 메시지 발행 (@TransactionalEventListener 또는 잠금 내 사후 처리)
       // TODO: 1번 문항 마감 예약 등록 (Scheduler)
       return response;
     });
@@ -39,7 +38,6 @@ public class QuizCoreService {
   public void abortQuiz(Long roomId, Long runId, Long hostUserId) {
     roomLockManager.executeWithLock(roomId, () -> {
       quizCoreTxService.abortQuiz(roomId, runId, hostUserId);
-      // TODO: 실시간 QUIZ_CANCELED 메시지 발행
       // TODO: 해당 방의 스케줄러 예약 작업 취소
     });
   }
@@ -48,15 +46,12 @@ public class QuizCoreService {
    * 05 API 명세 25번 결과 닫기 / 대기로 (POST /api/rooms/{roomId}/wait).
    */
   public void closeResult(Long roomId, Long hostUserId) {
-    roomLockManager.executeWithLock(roomId, () -> {
-      quizCoreTxService.closeResult(roomId, hostUserId);
-      // TODO: 실시간 ROOM_WAITING 메시지 발행
-    });
+    roomLockManager.executeWithLock(roomId, () -> quizCoreTxService.closeResult(roomId, hostUserId));
   }
 
   /**
    * 문항 마감 처리 (시간 만료 또는 5번 AnswerService의 전원 응답 판정 시 호출).
-   * 실시간 메시지 발행과 다음 문항 예약은 후속 연동 작업이다.
+   * QUESTION_CLOSED는 트랜잭션 커밋 후 발행하며 다음 문항 예약은 후속 연동 작업이다.
    */
   public void closeQuestion(Long roomId, Long runQuestionId) {
     roomLockManager.executeWithLock(roomId, () -> {
@@ -65,7 +60,6 @@ public class QuizCoreService {
         return;
       }
 
-      // TODO: 실시간 QUESTION_CLOSED 메시지 발행 (correctChoiceId, isLast, nextOpensAt)
       // TODO: 3초 뒤 마지막 문항이면 finishQuiz, 아니면 다음 문항 openQuestion 예약
     });
   }
@@ -78,7 +72,6 @@ public class QuizCoreService {
     return roomLockManager.executeWithLock(roomId, () -> {
       QuizResultResponse result = quizCoreTxService.finishQuiz(roomId, runId);
       if (result != null) {
-        // TODO: 실시간 QUIZ_FINISHED 메시지 발행
         log.info("Finished quiz and aggregated result for runId={}", runId);
       }
       return result;
@@ -91,7 +84,6 @@ public class QuizCoreService {
   public void openQuestion(Long roomId, Long runId, int orderNo) {
     roomLockManager.executeWithLock(roomId, () -> {
       quizCoreTxService.openQuestion(roomId, runId, orderNo);
-      // TODO: 실시간 QUESTION_OPENED 메시지 발행
       // TODO: 문항 마감 예약 등록 (closesAt + 1s)
     });
   }
