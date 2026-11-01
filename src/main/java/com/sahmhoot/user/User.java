@@ -1,4 +1,4 @@
-package com.sahmhoot.user.entity;
+package com.sahmhoot.user;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;

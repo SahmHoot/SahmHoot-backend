@@ -1,15 +1,15 @@
-package com.sahmhoot.auth.service;
+package com.sahmhoot.auth;
 
 import com.sahmhoot.auth.dto.AuthResponse;
 import com.sahmhoot.auth.dto.LoginRequest;
 import com.sahmhoot.auth.dto.SignupRequest;
+import com.sahmhoot.auth.jwt.JwtProvider;
+import com.sahmhoot.auth.verification.EmailVerificationService;
 import com.sahmhoot.auth.exception.ApiException;
 import com.sahmhoot.auth.exception.ErrorCode;
-import com.sahmhoot.auth.jwt.JwtProvider;
-import com.sahmhoot.auth.service.verification.EmailVerificationService;
-import com.sahmhoot.user.dto.UserResponse;
-import com.sahmhoot.user.entity.User;
-import com.sahmhoot.user.repository.UserRepository;
+import com.sahmhoot.user.User;
+import com.sahmhoot.user.UserRepository;
+import com.sahmhoot.user.UserResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;

@@ -1,7 +1,4 @@
-package com.sahmhoot.user.dto;
-
-import com.sahmhoot.user.entity.Role;
-import com.sahmhoot.user.entity.User;
+package com.sahmhoot.user;
 
 public record UserResponse(Long id, String email, String name, Role role) {
 

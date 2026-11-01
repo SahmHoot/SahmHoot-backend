@@ -1,4 +1,4 @@
-package com.sahmhoot.user.entity;
+package com.sahmhoot.user;
 
 public enum Role {
   PROFESSOR,

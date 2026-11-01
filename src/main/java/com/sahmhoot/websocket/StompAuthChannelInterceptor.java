@@ -1,6 +1,6 @@
 package com.sahmhoot.websocket;
 
-import com.sahmhoot.auth.dto.AuthUser;
+import com.sahmhoot.auth.AuthUser;
 import com.sahmhoot.auth.jwt.JwtProvider;
 import java.security.Principal;
 import java.util.regex.Matcher;

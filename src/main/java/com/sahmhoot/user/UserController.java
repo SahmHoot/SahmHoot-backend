@@ -1,10 +1,8 @@
-package com.sahmhoot.user.controller;
+package com.sahmhoot.user;
 
-import com.sahmhoot.auth.dto.AuthUser;
+import com.sahmhoot.auth.AuthUser;
 import com.sahmhoot.auth.exception.ApiException;
 import com.sahmhoot.auth.exception.ErrorCode;
-import com.sahmhoot.user.dto.UserResponse;
-import com.sahmhoot.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;

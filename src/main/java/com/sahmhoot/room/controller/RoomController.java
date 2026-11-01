@@ -1,6 +1,6 @@
 package com.sahmhoot.room.controller;
 
-import com.sahmhoot.auth.dto.AuthUser;
+import com.sahmhoot.auth.AuthUser;
 import com.sahmhoot.room.dto.CreateRoomRequest;
 import com.sahmhoot.room.dto.CreateRoomResponse;
 import com.sahmhoot.room.service.RoomService;
