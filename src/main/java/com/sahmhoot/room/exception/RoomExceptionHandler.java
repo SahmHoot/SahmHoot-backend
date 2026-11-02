@@ -7,6 +7,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @Slf4j
 @RestControllerAdvice(assignableTypes = RoomController.class)
@@ -15,6 +16,14 @@ public class RoomExceptionHandler {
   public ResponseEntity<RoomErrorResponse> business(RoomException error) {
     return ResponseEntity.status(error.getErrorCode().status())
         .body(RoomErrorResponse.of(error.getErrorCode(), error.getMessage()));
+  }
+
+  @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+  public ResponseEntity<RoomErrorResponse> path(MethodArgumentTypeMismatchException error) {
+    RoomErrorCode code = RoomErrorCode.VALIDATION_FAILED;
+    return ResponseEntity.status(code.status()).body(new RoomErrorResponse(code.status().value(),
+        code.name(), code.defaultMessage(), List.of(new RoomErrorResponse.FieldError(
+            error.getName(), "숫자 형식의 교실 번호를 입력해 주세요."))));
   }
 
   @ExceptionHandler(MethodArgumentNotValidException.class)
