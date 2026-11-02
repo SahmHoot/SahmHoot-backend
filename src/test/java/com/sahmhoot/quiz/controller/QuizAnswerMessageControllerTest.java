@@ -14,6 +14,7 @@ import com.sahmhoot.quiz.service.port.RoomPort;
 import com.sahmhoot.quiz.service.port.RoomSnapshot;
 import com.sahmhoot.quiz.service.port.RoomStatus;
 import java.security.Principal;
+import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -67,7 +68,7 @@ class QuizAnswerMessageControllerTest {
     SubmitAnswerRequest request = new SubmitAnswerRequest(812L, 3001L);
     Principal principal = () -> String.valueOf(hostUserId);
 
-    given(roomPort.getRoom(roomId)).willReturn(new RoomSnapshot(roomId, hostUserId, RoomStatus.PLAYING));
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.PLAYING)));
 
     assertThatThrownBy(() -> messageController.handleAnswer(roomId, request, principal))
         .isInstanceOf(BusinessException.class)
@@ -85,8 +86,8 @@ class QuizAnswerMessageControllerTest {
     SubmitAnswerRequest request = new SubmitAnswerRequest(812L, 3001L);
     Principal principal = () -> String.valueOf(studentUserId);
 
-    given(roomPort.getRoom(roomId)).willReturn(new RoomSnapshot(roomId, hostUserId, RoomStatus.PLAYING));
-    given(roomPort.findParticipantId(roomId, studentUserId)).willReturn(participantId);
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.PLAYING)));
+    given(roomPort.findParticipantId(roomId, studentUserId)).willReturn(Optional.of(participantId));
     given(answerService.submitAnswer(eq(roomId), eq(participantId), eq(request), eq(Set.of())))
         .willReturn(new AnswerProgressResponse(812L, 1));
 
@@ -104,9 +105,9 @@ class QuizAnswerMessageControllerTest {
     SubmitAnswerRequest request = new SubmitAnswerRequest(812L, 3001L);
     Principal principal = () -> String.valueOf(strangerUserId);
 
-    given(roomPort.getRoom(roomId)).willReturn(new RoomSnapshot(roomId, hostUserId, RoomStatus.PLAYING));
-    given(roomPort.findParticipantId(roomId, strangerUserId))
-        .willThrow(new BusinessException(ErrorCode.NOT_PARTICIPANT));
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.PLAYING)));
+    // 방 모듈은 참여자가 없으면 빈 값만 돌려주고, NOT_PARTICIPANT 오류는 퀴즈가 직접 던진다.
+    given(roomPort.findParticipantId(roomId, strangerUserId)).willReturn(Optional.empty());
 
     assertThatThrownBy(() -> messageController.handleAnswer(roomId, request, principal))
         .isInstanceOf(BusinessException.class)

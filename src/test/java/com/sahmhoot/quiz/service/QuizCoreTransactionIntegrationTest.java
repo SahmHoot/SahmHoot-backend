@@ -241,7 +241,7 @@ class QuizCoreTransactionIntegrationTest {
     Long questionSetId = 7L;
     StartQuizRequest request = new StartQuizRequest(questionSetId);
 
-    given(roomPort.getRoom(roomId)).willReturn(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN));
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN)));
     given(quizRunRepository.existsByRoomIdAndStatus(roomId, QuizRunStatus.RUNNING)).willReturn(false);
     given(questionSetPort.getQuestionSet(questionSetId)).willReturn(new QuestionSetSnapshot(questionSetId, hostUserId, "자료구조"));
 
@@ -330,7 +330,7 @@ class QuizCoreTransactionIntegrationTest {
     Long unauthorizedUserId = 99L;
     StartQuizRequest request = new StartQuizRequest(7L);
 
-    given(roomPort.getRoom(roomId)).willReturn(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN));
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN)));
 
     assertThatThrownBy(() -> quizCoreService.startQuiz(roomId, request, unauthorizedUserId))
         .isInstanceOf(BusinessException.class)

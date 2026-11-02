@@ -241,7 +241,9 @@ public class QuizCoreTxService {
   }
 
   private RoomSnapshot getRoomOwnedBy(Long roomId, Long hostUserId) {
-    RoomSnapshot room = roomPort.getRoom(roomId);
+    // 방 모듈은 "없음"만 알려 주고, 어떤 오류로 응답할지는 퀴즈가 정한다.
+    RoomSnapshot room = roomPort.findRoom(roomId)
+        .orElseThrow(() -> new BusinessException(ErrorCode.ROOM_NOT_FOUND));
     if (!room.hostId().equals(hostUserId)) {
       throw new BusinessException(ErrorCode.FORBIDDEN);
     }
