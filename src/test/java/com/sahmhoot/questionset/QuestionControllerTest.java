@@ -42,6 +42,44 @@ class QuestionControllerTest {
   }
   @AfterEach void clear() { SecurityContextHolder.clearContext(); }
 
+  @Test void orderRouteReturns204WithoutMatchingQuestionUpdate() throws Exception {
+    mvc.perform(put(PATH + "/order").contentType(MediaType.APPLICATION_JSON)
+        .content("{\"questionIds\":[3,1,2]}"))
+        .andExpect(status().isNoContent()).andExpect(content().string(""));
+    verify(service).reorder(7L, 42L, new ReorderQuestionsRequest(List.of(3L, 1L, 2L)));
+    verifyNoMoreInteractions(service);
+  }
+
+  @Test void orderErrorsUseExistingResponseFormat() throws Exception {
+    for (var code : List.of(QuestionSetErrorCode.ORDER_MISMATCH,
+        QuestionSetErrorCode.FORBIDDEN, QuestionSetErrorCode.QUESTION_SET_NOT_FOUND)) {
+      doThrow(new QuestionSetException(code)).when(service).reorder(eq(7L), eq(42L), any());
+      mvc.perform(put(PATH + "/order").contentType(MediaType.APPLICATION_JSON)
+          .content("{\"questionIds\":[1]}"))
+          .andExpect(status().is(code.status)).andExpect(jsonPath("$.status").value(code.status))
+          .andExpect(jsonPath("$.code").value(code.name()))
+          .andExpect(jsonPath("$.message").value(code.message))
+          .andExpect(jsonPath("$.fieldErrors").doesNotExist());
+    }
+  }
+
+  @Test void invalidOrderBodiesUseValidationFailed() throws Exception {
+    for (String body : List.of("{", "{}", "{\"questionIds\":null}",
+        "{\"questionIds\":[null]}", "{\"questionIds\":[0]}", "{\"questionIds\":[-1]}")) {
+      mvc.perform(put(PATH + "/order").contentType(MediaType.APPLICATION_JSON).content(body))
+          .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+          .andExpect(jsonPath("$.fieldErrors").isArray());
+    }
+    verifyNoInteractions(service);
+  }
+
+  @Test void unauthenticatedOrderRequestPrecedesBodyValidation() throws Exception {
+    SecurityContextHolder.clearContext();
+    mvc.perform(put(PATH + "/order").contentType(MediaType.APPLICATION_JSON).content("{"))
+        .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+    verifyNoInteractions(service);
+  }
+
   @Test void crudContracts() throws Exception {
     var response = new QuestionResponse(101L, 1, QuestionType.TRUE_FALSE, "문항", 60,
         List.of(new ChoiceResponse(301L, 1, "O", true), new ChoiceResponse(302L, 2, "X", false)));

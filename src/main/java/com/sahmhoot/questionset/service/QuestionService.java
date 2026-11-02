@@ -60,6 +60,28 @@ public class QuestionService {
     set.touch();
   }
 
+  @Transactional
+  public void reorder(Long setId, Long userId, ReorderQuestionsRequest request) {
+    QuestionSet set = owned(setId, userId, QuestionSetErrorCode.QUESTION_SET_NOT_FOUND);
+    var existing = questions.findByQuestionSetIdOrderByOrderNoAsc(setId);
+    var ids = request.questionIds();
+    Map<Long, Question> byId = new HashMap<>();
+    for (Question question : existing) byId.put(question.getId(), question);
+    if (ids.size() != existing.size() || new HashSet<>(ids).size() != ids.size()
+        || !byId.keySet().equals(new HashSet<>(ids))) {
+      throw new QuestionSetException(QuestionSetErrorCode.ORDER_MISMATCH);
+    }
+
+    // CRUD stores positive order numbers. Vacate them before assigning the final
+    // permutation so MySQL's immediate (question_set_id, order_no) UNIQUE check
+    // cannot collide. Negative temporary values also avoid positive INT overflow.
+    for (int i = 0; i < existing.size(); i++) existing.get(i).reorder(-i - 1);
+    questions.flush();
+    for (int i = 0; i < ids.size(); i++) byId.get(ids.get(i)).reorder(i + 1);
+    questions.flush();
+    set.touch();
+  }
+
   private QuestionSet owned(Long setId, Long userId, QuestionSetErrorCode notFoundCode) {
     QuestionSet set = sets.findLockedById(setId)
         .orElseThrow(() -> new QuestionSetException(notFoundCode));

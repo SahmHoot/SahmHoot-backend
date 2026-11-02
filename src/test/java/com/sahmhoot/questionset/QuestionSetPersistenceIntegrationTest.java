@@ -82,6 +82,108 @@ class QuestionSetPersistenceIntegrationTest {
     return jdbc.queryForObject("SELECT id FROM quiz_runs WHERE room_id = ?", Long.class, roomId);
   }
 
+  @Autowired com.sahmhoot.quiz.service.QuizCoreTxService quizStart;
+  @Autowired jakarta.persistence.EntityManager entityManager;
+
+  @Test void orderPermutationPersistsAndDetailReturnsNewOrder() throws Exception {
+    Long setId = create(null);
+    var first = question(setId, 1);
+    var second = question(setId, 2);
+    var third = question(setId, Integer.MAX_VALUE);
+    for (var q : List.of(first, second, third)) choices(q);
+    var requested = List.of(third.getId(), first.getId(), second.getId());
+    reorderHttp(setId, professor, requested).andExpect(status().isNoContent())
+        .andExpect(content().string(""));
+    entityManager.flush();
+    entityManager.clear();
+    String path = "/api/question-sets/" + setId;
+    mvc.perform(get(path).with(user(professor.id().toString())))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.questions[0].id").value(third.getId()))
+        .andExpect(jsonPath("$.questions[1].id").value(first.getId()))
+        .andExpect(jsonPath("$.questions[2].id").value(second.getId()))
+        .andExpect(jsonPath("$.questions[0].orderNo").value(1))
+        .andExpect(jsonPath("$.questions[1].orderNo").value(2))
+        .andExpect(jsonPath("$.questions[2].orderNo").value(3))
+        .andExpect(jsonPath("$.questions[0].choices[0].content").value("O"));
+    assertThat(jdbc.queryForList("SELECT id FROM questions WHERE question_set_id = ? ORDER BY order_no",
+        Long.class, setId)).containsExactlyElementsOf(requested);
+    // A second permutation swaps occupied positions and must also satisfy UNIQUE.
+    reorderHttp(setId, professor, List.of(first.getId(), third.getId(), second.getId()))
+        .andExpect(status().isNoContent());
+  }
+
+  @Test void invalidPermutationsReturnOrderMismatchWithoutChangingRows() throws Exception {
+    Long setId = create(null);
+    var first = question(setId, 1);
+    var second = question(setId, 2);
+    var third = question(setId, 3);
+    Long otherSetId = create(null);
+    var foreign = question(otherSetId, 1);
+    for (var ids : List.of(List.of(first.getId(), second.getId()),
+        List.of(first.getId(), first.getId(), third.getId()),
+        List.of(first.getId(), second.getId(), foreign.getId()),
+        List.of(first.getId(), second.getId(), Long.MAX_VALUE),
+        List.of(first.getId(), second.getId(), third.getId(), foreign.getId()), List.<Long>of())) {
+      reorderHttp(setId, professor, ids).andExpect(status().isBadRequest())
+          .andExpect(jsonPath("$.status").value(400))
+          .andExpect(jsonPath("$.code").value("ORDER_MISMATCH"));
+      assertThat(jdbc.queryForList("SELECT id FROM questions WHERE question_set_id = ? ORDER BY order_no",
+          Long.class, setId)).containsExactly(first.getId(), second.getId(), third.getId());
+    }
+    assertThat(foreign.getOrderNo()).isEqualTo(1);
+  }
+
+  @Test void orderRequiresOwnerEvenForPublicSets() throws Exception {
+    Long setId = create(Visibility.PUBLIC);
+    var q = question(setId, 1);
+    for (var actor : List.of(student, createUser("PROFESSOR"))) {
+      reorderHttp(setId, actor, List.of(q.getId())).andExpect(status().isForbidden())
+          .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+    }
+  }
+
+  @Test void orderMissingSetAndEmptySetContracts() throws Exception {
+    reorderHttp(Long.MAX_VALUE, professor, List.of()).andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.code").value("QUESTION_SET_NOT_FOUND"));
+    reorderHttp(create(null), professor, List.of()).andExpect(status().isNoContent());
+  }
+
+  @Test void quizStartCopiesReorderedQuestionsAndOpensNewFirstQuestion() throws Exception {
+    Long setId = create(null);
+    var first = question(setId, 1);
+    var second = question(setId, 2);
+    choices(first);
+    choices(second);
+    reorderHttp(setId, professor, List.of(second.getId(), first.getId()))
+        .andExpect(status().isNoContent());
+    String code = UUID.randomUUID().toString().replace("-", "").substring(0, 6);
+    jdbc.update("INSERT INTO rooms(host_id,title,code,status,created_at) VALUES (?, '순서 테스트', ?, 'OPEN', UTC_TIMESTAMP())",
+        professor.id(), code);
+    Long roomId = jdbc.queryForObject("SELECT id FROM rooms WHERE code = ?", Long.class, code);
+    var started = quizStart.startQuiz(roomId,
+        new com.sahmhoot.quiz.dto.StartQuizRequest(setId), professor.id());
+    entityManager.flush();
+    assertThat(started.totalQuestions()).isEqualTo(2);
+    assertThat(jdbc.queryForList("SELECT content FROM run_questions WHERE quiz_run_id = ? ORDER BY order_no",
+        String.class, started.runId())).containsExactly("문항 2", "문항 1");
+    assertThat(jdbc.queryForList("SELECT order_no FROM run_questions WHERE quiz_run_id = ? ORDER BY order_no",
+        Integer.class, started.runId())).containsExactly(1, 2);
+    assertThat(jdbc.queryForObject("SELECT content FROM run_questions WHERE id = ? AND status = 'OPEN'",
+        String.class, started.firstRunQuestionId())).isEqualTo("문항 2");
+    reorderHttp(setId, professor, List.of(first.getId(), second.getId()))
+        .andExpect(status().isNoContent());
+    assertThat(jdbc.queryForList("SELECT content FROM run_questions WHERE quiz_run_id = ? ORDER BY order_no",
+        String.class, started.runId())).containsExactly("문항 2", "문항 1");
+  }
+
+  private org.springframework.test.web.servlet.ResultActions reorderHttp(Long setId,
+      QuestionSetCurrentUser actor, List<Long> ids) throws Exception {
+    return mvc.perform(put("/api/question-sets/" + setId + "/questions/order")
+        .with(user(actor.id().toString())).contentType(MediaType.APPLICATION_JSON)
+        .content("{\"questionIds\":" + ids + "}"));
+  }
+
   private static final String QUESTION_BODY = """
       {"type":"TRUE_FALSE","content":"새 문항",
        "choices":[{"content":"O","isCorrect":true},{"content":"X","isCorrect":false}]}

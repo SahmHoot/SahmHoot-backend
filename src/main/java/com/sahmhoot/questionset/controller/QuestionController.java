@@ -23,6 +23,13 @@ public class QuestionController {
     return service.add(setId, auth.requireUser().id(), request);
   }
 
+  @PutMapping("/order")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void reorder(@PathVariable @Positive Long setId,
+      @Valid @RequestBody ReorderQuestionsRequest request) {
+    service.reorder(setId, auth.requireUser().id(), request);
+  }
+
   @PutMapping("/{questionId}")
   public QuestionResponse update(@PathVariable @Positive Long setId,
       @PathVariable @Positive Long questionId, @Valid @RequestBody QuestionWriteRequest request) {
