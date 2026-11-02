@@ -1,7 +1,7 @@
 # 삼훗(SahmHoot) — 백엔드
 
 수업 중 실시간 소통 서비스를 위한 백엔드입니다. 산학협력캡스톤디자인 I (2026-2), 팀 강육김권김.
-현재는 팀원들의 기능 개발을 시작하기 위한 최소 Backend Skeleton을 제공합니다.
+JWT 인증, 문제집 관리와 실시간 퀴즈 기능을 제공합니다.
 
 ## 기술 스택
 
@@ -11,24 +11,23 @@
 | Spring Boot | 4.1.1 |
 | 빌드 | Gradle (wrapper 포함, 별도 설치 불필요) |
 | DB | MySQL 8.4 LTS (Docker), Flyway |
-| 현재 범위 | 애플리케이션 기동, Health API, Flyway V1 스키마(10개 테이블) |
+| 현재 범위 | JWT 인증, 문제집 CRUD, 실시간 퀴즈, 로컬 시드, Flyway V1 스키마 |
 
 ## 현재 구현 범위
 
 - `SahmhootApplication`
 - `HealthController` (`GET /api/health`)
-- 개발 초기용 최소 `SecurityConfig` (`/api/**` 인증 없이 허용)
+- JWT 기반 `SecurityConfig`, 회원가입·로그인·이메일 인증
 - 기본 Application Test 및 HealthController Test
 - Flyway `V1__init.sql` (10개 테이블 스키마, DB 레포 `sahmhoot.sql`과 동일)
+- 문제집 CRUD와 문항·선택지 조회, 퀴즈·답변 API, WebSocket/STOMP
+- local 전용 개발 계정과 샘플 문제집 시드
+- Swagger/OpenAPI
 
 다음 기능은 아직 구현하지 않았습니다.
 
-- JWT, 회원가입, 로그인
-- Entity 및 도메인 API
-- Room, QuestionSet, Quiz, Answer API
-- 실제 WebSocket/STOMP 연결
+- 문항 작성 CRUD API (#50)
 - Redis 연결
-- GlobalExceptionHandler, Scheduler, Swagger/OpenAPI, Mail
 
 ## 관련 링크
 
@@ -83,17 +82,78 @@ cp src/main/resources/application-local.yml.example src/main/resources/applicati
 ```
 
 `application-local.yml`의 `password`를 DB 레포 `docker.yml`의 `MYSQL_PASSWORD` 값으로 바꿉니다. 이 파일은 gitignore되어 커밋되지 않습니다.
+Windows PowerShell에서는 `cp` 대신 `Copy-Item`을 사용할 수 있습니다.
+
+로컬 시드는 기본적으로 비활성화됩니다. 시드가 필요하면 `application-local.yml`에 다음 설정을 넣으세요.
+예제 파일에는 이 설정이 포함되어 있으므로, 복사하면 시드가 활성화됩니다.
+
+```yaml
+app:
+  seed:
+    enabled: true
+```
+
+이미 `app` 설정이 있다면 그 아래에 `seed`를 합쳐 중복 키를 피하세요.
+시드를 원하지 않으면 `enabled: false`로 바꾸거나 `seed` 설정을 제거하세요.
+운영 환경에서는 시드를 활성화하지 마세요.
 
 ### 3. 실행
 
 ```bash
-./gradlew bootRun
+./gradlew bootRun --args='--spring.profiles.active=local'
 ```
 
 - 서버 상태: http://localhost:8080/api/health → `{"status":"UP"}`
+
+### 로컬 시드 데이터 (#52)
+
+`local` 프로파일과 명시적 `app.seed.enabled=true` 설정이 함께 있을 때만,
+Flyway 적용 및 JPA 스키마 검증 후 다음 계정을 자동 생성합니다.
+Windows에서는 `./gradlew` 대신 `.\gradlew.bat`를 사용합니다.
+
+| 이메일 | 역할 | 개발 전용 예시 비밀번호 |
+|---|---|---|
+| professor@local.test | PROFESSOR | Test1234! |
+| student1@local.test | STUDENT | Test1234! |
+| student2@local.test | STUDENT | Test1234! |
+| student3@local.test | STUDENT | Test1234! |
+
+이 비밀번호는 **개발 전용 공개 예시**입니다. 운영 계정에 사용하지 마세요.
+비밀번호는 기존 BCrypt `PasswordEncoder`로 암호화해 저장합니다. 학번은 비워 두며,
+시드 계정은 이메일 인증 완료 상태로 생성되어 `POST /api/auth/login`으로 바로 로그인할 수 있습니다.
+
+교수 계정 소유의 PUBLIC 문제집 `[로컬 샘플] 컴퓨터 기초 퀴즈`도 생성합니다.
+객관식 1문항(선택지 4개)과 OX 1문항(`O`, `X`)이며, 각 문항의 정답은 하나입니다.
+교수 로그인 후 `GET /api/question-sets/mine`에서 ID를 확인하고,
+로그인한 계정으로 `GET /api/question-sets/{id}`에서 문항과 선택지를 조회할 수 있습니다.
+
+- `app.seed.enabled=true`이고 `local`이 있으며 `test`, `prod`가 모두 없는 경우에만 시드 Bean이 등록됩니다.
+  `prod`, `local,prod`, `local,test` 등의 실행에서는 생성하지 않습니다.
+  기본 프로파일은 `local`이지만, 스위치를 생략하거나 `false`로 설정하면 시드를 생성하지 않습니다.
+  운영에서는 반드시 `prod`를 명시하고 시드 활성화 설정을 사용하지 마세요.
+- 기존 이메일의 계정은 비밀번호·이름·학번을 변경하지 않습니다. 기존 비밀번호로 로그인하세요.
+  기존 계정의 역할이 예시와 다르면 전체 시드 트랜잭션을 롤백하고 기동을 실패시킵니다.
+- 문제집은 교수 ID와 제목으로 확인합니다. 같은 소유자·제목의 세트가 있으면
+  문항을 추가하거나 기존 내용을 덮어쓰지 않습니다. 제목을 바꾸면 다음 실행에서 샘플을 새로 만듭니다.
+- 생성 전체는 한 트랜잭션이며 기존 데이터를 삭제하지 않습니다.
+  Flyway V1에는 시드 데이터를 넣지 않습니다.
+
+로그인 예시:
+
+```bash
+curl -X POST http://localhost:8080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"professor@local.test","password":"Test1234!"}'
+```
 
 ### 테스트
 
 ```bash
 ./gradlew test           # 테스트 (sahmhoot_test DB 사용)
 ```
+
+시드 통합 테스트는 테스트 DB를 대상으로 실제 `prod`·`local` 기동, 로그인·PUBLIC 세트 조회,
+local에서 시드 스위치 누락·비활성화 시 Bean 미등록과 데이터 미생성,
+재기동 중복 방지, 생성 실패 롤백과 기존 데이터 보존을 검증합니다.
+`TEST_DB_URL`로 테스트 DB를 지정할 수 있습니다. 시드 예시 이메일이 없는 별도 테스트 DB를 사용하세요.
+테스트는 자동 생성 ID를 사용하고 자신이 만든 데이터만 정리합니다.
