@@ -9,6 +9,10 @@ public interface ChoiceRepository extends JpaRepository<Choice, Long> {
   List<Choice> findByQuestionIdInOrderByOrderNoAsc(Collection<Long> questionIds);
   List<Choice> findByQuestionQuestionSetId(Long setId);
 
+  default void deleteForQuestion(Long id) {
+    deleteAll(findByQuestionIdInOrderByOrderNoAsc(List.of(id)));
+  }
+
   default void deleteForSet(Long id) {
     deleteAll(findByQuestionQuestionSetId(id));
   }

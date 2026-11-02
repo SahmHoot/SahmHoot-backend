@@ -1,6 +1,7 @@
 package com.sahmhoot.questionset.auth;
 
 import com.sahmhoot.questionset.controller.QuestionSetController;
+import com.sahmhoot.questionset.controller.QuestionController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -19,7 +20,8 @@ public class QuestionSetAuthenticationInterceptor implements HandlerInterceptor 
   @Override
   public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
     if (handler instanceof HandlerMethod method
-        && QuestionSetController.class.isAssignableFrom(method.getBeanType())) {
+        && (QuestionSetController.class.isAssignableFrom(method.getBeanType())
+            || QuestionController.class.isAssignableFrom(method.getBeanType()))) {
       auth.requireUser();
     }
     return true;
