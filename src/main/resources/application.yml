@@ -38,6 +38,9 @@ app:
   auth:
     # 쉼표로 구분(예: syuin.ac.kr). 비우면 도메인 제한 없음
     allowed-email-domains: ${ALLOWED_EMAIL_DOMAINS:}
+  room:
+    # 학생 입장 주소의 프론트엔드 URL. 배포 시 공개 주소로 설정
+    join-base-url: ${APP_ROOM_JOIN_BASE_URL:http://localhost:5173}
   cors:
     # REST CORS와 WebSocket 허용 origin. 운영은 실제 도메인만
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
