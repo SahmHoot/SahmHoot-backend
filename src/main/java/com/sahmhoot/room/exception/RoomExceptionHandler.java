@@ -1,8 +1,5 @@
 package com.sahmhoot.room.exception;
 
-import com.sahmhoot.auth.exception.ApiException;
-import com.sahmhoot.auth.exception.ErrorCode;
-import com.sahmhoot.auth.exception.ErrorResponse;
 import com.sahmhoot.room.controller.RoomController;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
@@ -14,32 +11,35 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 @Slf4j
 @RestControllerAdvice(assignableTypes = RoomController.class)
 public class RoomExceptionHandler {
-  @ExceptionHandler(ApiException.class)
-  public ResponseEntity<ErrorResponse> business(ApiException error) {
+  @ExceptionHandler(RoomException.class)
+  public ResponseEntity<RoomErrorResponse> business(RoomException error) {
     return ResponseEntity.status(error.getErrorCode().status())
-        .body(ErrorResponse.of(error.getErrorCode(), error.getMessage()));
+        .body(RoomErrorResponse.of(error.getErrorCode(), error.getMessage()));
   }
 
   @ExceptionHandler(MethodArgumentNotValidException.class)
-  public ResponseEntity<ErrorResponse> validation(MethodArgumentNotValidException error) {
+  public ResponseEntity<RoomErrorResponse> validation(MethodArgumentNotValidException error) {
     var fields = error.getBindingResult().getFieldErrors().stream()
-        .map(e -> new ErrorResponse.FieldError(e.getField(), e.getDefaultMessage())).toList();
-    ErrorCode code = ErrorCode.VALIDATION_FAILED;
+        .map(e -> new RoomErrorResponse.FieldError(e.getField(), e.getDefaultMessage())).toList();
+    RoomErrorCode code = RoomErrorCode.VALIDATION_FAILED;
     return ResponseEntity.status(code.status())
-        .body(new ErrorResponse(code.status().value(), code.name(), code.defaultMessage(), fields));
+        .body(new RoomErrorResponse(code.status().value(), code.name(), code.defaultMessage(), fields));
   }
 
   @ExceptionHandler(HttpMessageNotReadableException.class)
-  public ResponseEntity<ErrorResponse> malformed(HttpMessageNotReadableException error) {
-    ErrorCode code = ErrorCode.VALIDATION_FAILED;
-    return ResponseEntity.status(code.status()).body(new ErrorResponse(code.status().value(), code.name(),
-        "요청 본문을 읽을 수 없습니다.", List.of(new ErrorResponse.FieldError("body", "JSON 형식을 확인해 주세요."))));
+  public ResponseEntity<RoomErrorResponse> malformed(HttpMessageNotReadableException error) {
+    RoomErrorCode code = RoomErrorCode.VALIDATION_FAILED;
+    return ResponseEntity.status(code.status()).body(new RoomErrorResponse(code.status().value(), code.name(),
+        "요청 본문을 읽을 수 없습니다.", List.of(new RoomErrorResponse.FieldError("body", "JSON 형식을 확인해 주세요."))));
   }
 
   @ExceptionHandler(Exception.class)
-  public ResponseEntity<ErrorResponse> unexpected(Exception error) {
+  public ResponseEntity<RoomErrorResponse> unexpected(Exception error) throws Exception {
+    if (error instanceof org.springframework.web.ErrorResponse) {
+      throw error;
+    }
     log.error("Room request failed", error);
     return ResponseEntity.internalServerError()
-        .body(ErrorResponse.of(ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.defaultMessage()));
+        .body(RoomErrorResponse.of(RoomErrorCode.INTERNAL_ERROR, RoomErrorCode.INTERNAL_ERROR.defaultMessage()));
   }
 }

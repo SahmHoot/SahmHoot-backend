@@ -1,15 +1,13 @@
 package com.sahmhoot.room.service;
 
-import com.sahmhoot.auth.exception.ApiException;
-import com.sahmhoot.auth.exception.ErrorCode;
 import com.sahmhoot.room.dto.CreateRoomRequest;
 import com.sahmhoot.room.dto.CreateRoomResponse;
 import com.sahmhoot.room.entity.Room;
 import com.sahmhoot.room.entity.RoomParticipant;
+import com.sahmhoot.room.exception.RoomErrorCode;
+import com.sahmhoot.room.exception.RoomException;
 import com.sahmhoot.room.repository.RoomParticipantRepository;
 import com.sahmhoot.room.repository.RoomRepository;
-import com.sahmhoot.user.Role;
-import com.sahmhoot.user.UserRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -22,13 +20,13 @@ import org.springframework.web.util.UriComponentsBuilder;
 public class RoomService {
   private final RoomRepository rooms;
   private final RoomParticipantRepository participants;
-  private final UserRepository users;
+  private final RoomUserLookup users;
   private final JoinCodeGenerator codes;
   private final TransactionTemplate creation;
   private final String joinBaseUrl;
 
   public RoomService(RoomRepository rooms, RoomParticipantRepository participants,
-      UserRepository users, JoinCodeGenerator codes, PlatformTransactionManager transactions,
+      RoomUserLookup users, JoinCodeGenerator codes, PlatformTransactionManager transactions,
       @Value("${app.room.join-base-url:http://localhost:5173}") String joinBaseUrl) {
     this.rooms = rooms;
     this.participants = participants;
@@ -41,14 +39,14 @@ public class RoomService {
   }
 
   public CreateRoomResponse create(Long userId, CreateRoomRequest request) {
-    var host = users.findById(userId).orElseThrow(() -> new ApiException(ErrorCode.UNAUTHORIZED));
-    if (host.getRole() != Role.PROFESSOR) throw new ApiException(ErrorCode.FORBIDDEN);
+    var host = users.findById(userId).orElseThrow(() -> new RoomException(RoomErrorCode.UNAUTHORIZED));
+    if (!"PROFESSOR".equals(host.role())) throw new RoomException(RoomErrorCode.FORBIDDEN);
     for (int attempt = 0; attempt < 10; attempt++) {
       String code = codes.generate();
       try {
         return creation.execute(tx -> {
-          Room room = rooms.saveAndFlush(new Room(host.getId(), request.title(), code));
-          participants.saveAndFlush(new RoomParticipant(room.getId(), host.getId(), host.getName()));
+          Room room = rooms.saveAndFlush(new Room(host.id(), request.title(), code));
+          participants.saveAndFlush(new RoomParticipant(room.getId(), host.id(), host.name()));
           String joinUrl = UriComponentsBuilder.fromUriString(joinBaseUrl)
               .pathSegment("join", code).build().toUriString();
           return new CreateRoomResponse(room.getId(), room.getTitle(), room.getStatus(), code,

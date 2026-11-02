@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.jayway.jsonpath.JsonPath;
@@ -153,6 +154,25 @@ class RoomCreationIntegrationTest {
         .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
     users.deleteById(professor.getId());
     create("{\"title\":\"수업\"}", Role.PROFESSOR).andExpect(status().isUnauthorized());
+  }
+
+  @ParameterizedTest @ValueSource(strings = {"text/plain", "application/xml"})
+  void unsupportedContentTypeReturns415(String contentType) throws Exception {
+    String token = jwt.issue(professor.getId(), Role.PROFESSOR).accessToken();
+    mvc.perform(post("/api/rooms").header("Authorization", "Bearer " + token)
+        .contentType(MediaType.parseMediaType(contentType)).content("hello"))
+        .andExpect(status().isUnsupportedMediaType());
+    assertThat(roomCount()).isZero();
+    verifyNoInteractions(codes);
+  }
+
+  @Test void unsupportedHttpMethodReturns405() throws Exception {
+    String token = jwt.issue(professor.getId(), Role.PROFESSOR).accessToken();
+    mvc.perform(put("/api/rooms").header("Authorization", "Bearer " + token)
+        .contentType(MediaType.APPLICATION_JSON).content("{\"title\":\"수업\"}"))
+        .andExpect(status().isMethodNotAllowed());
+    assertThat(roomCount()).isZero();
+    verifyNoInteractions(codes);
   }
 
   @ParameterizedTest @ValueSource(strings = {"", "{", "null"})
