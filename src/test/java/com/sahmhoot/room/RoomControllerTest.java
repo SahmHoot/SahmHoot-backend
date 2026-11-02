@@ -3,17 +3,23 @@ package com.sahmhoot.room;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.sahmhoot.auth.AuthUser;
 import com.sahmhoot.room.controller.RoomController;
+import com.sahmhoot.room.dto.RoomSummaryResponse;
+import com.sahmhoot.room.entity.RoomStatus;
 import com.sahmhoot.room.exception.RoomErrorCode;
 import com.sahmhoot.room.exception.RoomException;
 import com.sahmhoot.room.exception.RoomExceptionHandler;
+import com.sahmhoot.room.service.RoomManagementService;
 import com.sahmhoot.room.service.RoomService;
 import com.sahmhoot.user.Role;
+import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,10 +36,11 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class RoomControllerTest {
   private final RoomService service = mock(RoomService.class);
+  private final RoomManagementService management = mock(RoomManagementService.class);
   private MockMvc mvc;
 
   @BeforeEach void setup() {
-    mvc = MockMvcBuilders.standaloneSetup(new RoomController(service))
+    mvc = MockMvcBuilders.standaloneSetup(new RoomController(service, management))
         .setControllerAdvice(new RoomExceptionHandler())
         .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver()).build();
     SecurityContextHolder.getContext().setAuthentication(
@@ -97,5 +104,29 @@ class RoomControllerTest {
         .andExpect(jsonPath("$.message").value("요청 본문을 읽을 수 없습니다."))
         .andExpect(jsonPath("$.fieldErrors[0].field").value("body"));
     verifyNoInteractions(service);
+  }
+
+  @Test void mineUsesAuthenticatedUserAndReturnsRoomSummaries() throws Exception {
+    when(management.mine(1L)).thenReturn(List.of(new RoomSummaryResponse(
+        42L, "수업", RoomStatus.OPEN, "123456", 0, Instant.parse("2026-11-01T00:00:00Z"))));
+    mvc.perform(get("/api/rooms/mine"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$[0].id").value(42))
+        .andExpect(jsonPath("$[0].onlineCount").value(0));
+    verify(management).mine(1L);
+  }
+
+  @Test void closeUsesAuthenticatedUserAndReturnsNoContent() throws Exception {
+    mvc.perform(patch("/api/rooms/42/close"))
+        .andExpect(status().isNoContent()).andExpect(content().string(""));
+    verify(management).close(42L, 1L);
+  }
+
+  @Test void malformedRoomIdKeepsValidationField() throws Exception {
+    mvc.perform(patch("/api/rooms/abc/close"))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+        .andExpect(jsonPath("$.fieldErrors[0].field").value("roomId"));
+    verifyNoInteractions(management);
   }
 }
