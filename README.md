@@ -82,6 +82,20 @@ cp src/main/resources/application-local.yml.example src/main/resources/applicati
 ```
 
 `application-local.yml`의 `password`를 DB 레포 `docker.yml`의 `MYSQL_PASSWORD` 값으로 바꿉니다. 이 파일은 gitignore되어 커밋되지 않습니다.
+Windows PowerShell에서는 `cp` 대신 `Copy-Item`을 사용할 수 있습니다.
+
+로컬 시드는 기본적으로 비활성화됩니다. 시드가 필요하면 `application-local.yml`에 다음 설정을 넣으세요.
+예제 파일에는 이 설정이 포함되어 있으므로, 복사하면 시드가 활성화됩니다.
+
+```yaml
+app:
+  seed:
+    enabled: true
+```
+
+이미 `app` 설정이 있다면 그 아래에 `seed`를 합쳐 중복 키를 피하세요.
+시드를 원하지 않으면 `enabled: false`로 바꾸거나 `seed` 설정을 제거하세요.
+운영 환경에서는 시드를 활성화하지 마세요.
 
 ### 3. 실행
 
@@ -93,7 +107,8 @@ cp src/main/resources/application-local.yml.example src/main/resources/applicati
 
 ### 로컬 시드 데이터 (#52)
 
-`local` 프로파일로 실행하면 Flyway 적용 및 JPA 스키마 검증 후 다음 계정을 자동 생성합니다.
+`local` 프로파일과 명시적 `app.seed.enabled=true` 설정이 함께 있을 때만,
+Flyway 적용 및 JPA 스키마 검증 후 다음 계정을 자동 생성합니다.
 Windows에서는 `./gradlew` 대신 `.\gradlew.bat`를 사용합니다.
 
 | 이메일 | 역할 | 개발 전용 예시 비밀번호 |
@@ -112,9 +127,10 @@ Windows에서는 `./gradlew` 대신 `.\gradlew.bat`를 사용합니다.
 교수 로그인 후 `GET /api/question-sets/mine`에서 ID를 확인하고,
 로그인한 계정으로 `GET /api/question-sets/{id}`에서 문항과 선택지를 조회할 수 있습니다.
 
-- `local`이 있고 `test`, `prod`가 모두 없는 경우에만 시드 Bean이 등록됩니다.
+- `app.seed.enabled=true`이고 `local`이 있으며 `test`, `prod`가 모두 없는 경우에만 시드 Bean이 등록됩니다.
   `prod`, `local,prod`, `local,test` 등의 실행에서는 생성하지 않습니다.
-  기본 프로파일은 `local`이므로 운영에서는 반드시 `prod`를 명시하세요.
+  기본 프로파일은 `local`이지만, 스위치를 생략하거나 `false`로 설정하면 시드를 생성하지 않습니다.
+  운영에서는 반드시 `prod`를 명시하고 시드 활성화 설정을 사용하지 마세요.
 - 기존 이메일의 계정은 비밀번호·이름·학번을 변경하지 않습니다. 기존 비밀번호로 로그인하세요.
   기존 계정의 역할이 예시와 다르면 전체 시드 트랜잭션을 롤백하고 기동을 실패시킵니다.
 - 문제집은 교수 ID와 제목으로 확인합니다. 같은 소유자·제목의 세트가 있으면
@@ -137,6 +153,7 @@ curl -X POST http://localhost:8080/api/auth/login \
 ```
 
 시드 통합 테스트는 테스트 DB를 대상으로 실제 `prod`·`local` 기동, 로그인·PUBLIC 세트 조회,
+local에서 시드 스위치 누락·비활성화 시 Bean 미등록과 데이터 미생성,
 재기동 중복 방지, 생성 실패 롤백과 기존 데이터 보존을 검증합니다.
 `TEST_DB_URL`로 테스트 DB를 지정할 수 있습니다. 시드 예시 이메일이 없는 별도 테스트 DB를 사용하세요.
 테스트는 자동 생성 ID를 사용하고 자신이 만든 데이터만 정리합니다.

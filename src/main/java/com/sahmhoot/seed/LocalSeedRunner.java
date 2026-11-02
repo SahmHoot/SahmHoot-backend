@@ -17,6 +17,7 @@ import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
@@ -26,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** 로컬 개발용 샘플. 기존 계정과 문제집은 변경하지 않는다. */
 @Component
 @Profile("local & !test & !prod")
+@ConditionalOnProperty(name = "app.seed.enabled", havingValue = "true")
 @RequiredArgsConstructor
 public class LocalSeedRunner implements ApplicationRunner {
   static final String TITLE = "[로컬 샘플] 컴퓨터 기초 퀴즈";

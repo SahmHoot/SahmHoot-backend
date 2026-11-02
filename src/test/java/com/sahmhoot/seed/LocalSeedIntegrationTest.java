@@ -18,6 +18,7 @@ import com.sahmhoot.user.Role;
 import com.sahmhoot.user.User;
 import com.sahmhoot.user.UserRepository;
 import jakarta.persistence.EntityManager;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -39,7 +40,7 @@ class LocalSeedIntegrationTest {
 
   @Test
   void migratesRollsBackSeedsLogsInAndSurvivesAnApplicationRestart() throws Exception {
-    try (var prod = start("prod")) {
+    try (var prod = start("prod", "--app.seed.enabled=true")) {
       JdbcTemplate jdbc = prod.getBean(JdbcTemplate.class);
       assertThat(prod.getBeansOfType(LocalSeedRunner.class)).isEmpty();
       assertThat(jdbc.queryForObject("""
@@ -48,6 +49,15 @@ class LocalSeedIntegrationTest {
       assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM users WHERE email IN (?, ?, ?, ?)",
           Long.class, EMAILS.toArray())).isZero();
       var before = snapshot(jdbc);
+      try (var local = start("local")) {
+        assertThat(local.getEnvironment().getProperty("app.seed.enabled")).isNull();
+        assertThat(local.getBeansOfType(LocalSeedRunner.class)).isEmpty();
+        assertThat(snapshot(jdbc)).isEqualTo(before);
+      }
+      try (var local = start("local", "--app.seed.enabled=false")) {
+        assertThat(local.getBeansOfType(LocalSeedRunner.class)).isEmpty();
+        assertThat(snapshot(jdbc)).isEqualTo(before);
+      }
       var tx = new TransactionTemplate(prod.getBean(PlatformTransactionManager.class));
       var failingChoices = mock(ChoiceRepository.class);
       when(failingChoices.saveAll(any())).thenThrow(new IllegalStateException("seed failure"));
@@ -72,7 +82,7 @@ class LocalSeedIntegrationTest {
       });
       try {
         Map<String, List<Map<String, Object>>> seeded;
-        try (var local = start("local")) {
+        try (var local = start("local", "--app.seed.enabled=true")) {
           assertThat(local.getBeansOfType(LocalSeedRunner.class)).hasSize(1);
           var mvc = MockMvcBuilders.webAppContextSetup((WebApplicationContext) local)
               .apply(springSecurity()).build();
@@ -91,11 +101,11 @@ class LocalSeedIntegrationTest {
               String.class, retainedIds[2])).isEqualTo("보존할 데이터");
           seeded = snapshot(jdbc);
         }
-        try (var restarted = start("local")) {
+        try (var restarted = start("local", "--app.seed.enabled=true")) {
           assertThat(restarted.getBeansOfType(LocalSeedRunner.class)).hasSize(1);
           assertThat(snapshot(jdbc)).isEqualTo(seeded);
         }
-        try (var mixed = start("local,prod,test")) {
+        try (var mixed = start("local,prod,test", "--app.seed.enabled=true")) {
           assertThat(mixed.getBeansOfType(LocalSeedRunner.class)).isEmpty();
           assertThat(snapshot(jdbc)).isEqualTo(seeded);
         }
@@ -121,13 +131,15 @@ class LocalSeedIntegrationTest {
     }
   }
 
-  private ConfigurableApplicationContext start(String profiles) {
+  private ConfigurableApplicationContext start(String profiles, String... properties) {
     String url = System.getenv().getOrDefault("TEST_DB_URL",
         "jdbc:mysql://localhost:3306/sahmhoot_test?characterEncoding=UTF-8&connectionTimeZone=UTC");
-    return new SpringApplicationBuilder(SahmhootApplication.class).run(
+    var args = new ArrayList<>(List.of(
         "--spring.profiles.active=" + profiles, "--spring.datasource.url=" + url,
         "--server.port=0", "--spring.main.banner-mode=off",
-        "--app.jwt.secret=test-only-seed52-jwt-key-0123456789abcdef");
+        "--app.jwt.secret=test-only-seed52-jwt-key-0123456789abcdef"));
+    args.addAll(List.of(properties));
+    return new SpringApplicationBuilder(SahmhootApplication.class).run(args.toArray(String[]::new));
   }
 
   private Map<String, List<Map<String, Object>>> snapshot(JdbcTemplate jdbc) {

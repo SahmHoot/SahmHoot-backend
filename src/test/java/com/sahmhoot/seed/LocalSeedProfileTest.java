@@ -8,6 +8,7 @@ import com.sahmhoot.questionset.repository.QuestionRepository;
 import com.sahmhoot.questionset.repository.QuestionSetRepository;
 import com.sahmhoot.user.UserRepository;
 import jakarta.persistence.EntityManager;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -23,6 +24,7 @@ class LocalSeedProfileTest {
     boolean enabled = specification.equals("local") || specification.equals("local,dev")
         || specification.equals("default");
     new ApplicationContextRunner()
+        .withPropertyValues("app.seed.enabled=true")
         .withInitializer(context -> {
           context.getEnvironment().setDefaultProfiles("local");
           if (!specification.equals("default")) {
@@ -40,6 +42,28 @@ class LocalSeedProfileTest {
           assertThat(context).hasNotFailed();
           if (enabled) assertThat(context).hasSingleBean(LocalSeedRunner.class);
           else assertThat(context).doesNotHaveBean(LocalSeedRunner.class);
+        });
+  }
+
+  @Test
+  void localWithoutSeedSwitchDoesNotRegisterRunner() {
+    new ApplicationContextRunner()
+        .withPropertyValues("spring.profiles.active=local")
+        .withUserConfiguration(LocalSeedRunner.class)
+        .run(context -> {
+          assertThat(context).hasNotFailed();
+          assertThat(context).doesNotHaveBean(LocalSeedRunner.class);
+        });
+  }
+
+  @Test
+  void localWithSeedSwitchDisabledDoesNotRegisterRunner() {
+    new ApplicationContextRunner()
+        .withPropertyValues("spring.profiles.active=local", "app.seed.enabled=false")
+        .withUserConfiguration(LocalSeedRunner.class)
+        .run(context -> {
+          assertThat(context).hasNotFailed();
+          assertThat(context).doesNotHaveBean(LocalSeedRunner.class);
         });
   }
 }
