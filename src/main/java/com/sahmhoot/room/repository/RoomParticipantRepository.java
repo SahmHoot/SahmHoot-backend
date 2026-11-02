@@ -1,6 +1,9 @@
 package com.sahmhoot.room.repository;
 
 import com.sahmhoot.room.entity.RoomParticipant;
+import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 
-public interface RoomParticipantRepository extends JpaRepository<RoomParticipant, Long> {}
+public interface RoomParticipantRepository extends JpaRepository<RoomParticipant, Long> {
+  Optional<RoomParticipant> findByRoomIdAndUserIdAndLeftAtIsNull(Long roomId, Long userId);
+}
