@@ -26,6 +26,7 @@ import com.sahmhoot.quiz.service.port.RoomPort;
 import com.sahmhoot.quiz.service.port.RoomSnapshot;
 import com.sahmhoot.quiz.service.port.RoomStatus;
 import java.time.Duration;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -51,6 +52,8 @@ public class QuizCoreTxService {
   private final RoomPort roomPort;
   private final QuestionSetPort questionSetPort;
   private final ApplicationEventPublisher eventPublisher;
+  /** 현재 시각을 읽는 시계. 운영은 진짜 UTC 시계, 테스트는 가짜 시계가 들어온다({@code QuizClockConfig}). */
+  private final Clock clock;
 
   /**
    * 퀴즈 시작 트랜잭션.
@@ -88,7 +91,7 @@ public class QuizCoreTxService {
       throw new BusinessException(ErrorCode.QUIZ_NOT_RUNNING);
     }
 
-    Instant now = Instant.now();
+    Instant now = Instant.now(clock);
     quizRun.abort(now);
     quizRunRepository.save(quizRun);
 
@@ -123,7 +126,7 @@ public class QuizCoreTxService {
 
     // 방 상태를 OPEN(대기)으로 복귀
     roomPort.updateStatus(roomId, RoomStatus.OPEN);
-    eventPublisher.publishEvent(new QuizStateChangedEvent(roomId, RoomWaitingMessage.of(Instant.now())));
+    eventPublisher.publishEvent(new QuizStateChangedEvent(roomId, RoomWaitingMessage.of(Instant.now(clock))));
     log.info("Closed quiz result for roomId={}, runId={}, returned to OPEN", roomId, latestRun.getId());
   }
 
@@ -146,7 +149,7 @@ public class QuizCoreTxService {
       return CloseQuestionResult.ignored();
     }
 
-    Instant now = Instant.now();
+    Instant now = Instant.now(clock);
     Instant maxAllowed = question.getClosesAt() != null ? question.getClosesAt().plusSeconds(1) : now;
     Instant actualClosedAt = now.isBefore(maxAllowed) ? now : maxAllowed;
     question.close(actualClosedAt);
@@ -195,7 +198,7 @@ public class QuizCoreTxService {
       return null;
     }
 
-    Instant now = Instant.now();
+    Instant now = Instant.now(clock);
     quizRun.finish(now);
     quizRunRepository.save(quizRun);
 
@@ -232,7 +235,7 @@ public class QuizCoreTxService {
       return;
     }
 
-    Instant now = Instant.now();
+    Instant now = Instant.now(clock);
     Instant closesAt = now.plus(Duration.ofSeconds(question.getTimeLimitSeconds()));
     question.open(now, closesAt);
     runQuestionRepository.save(question);
@@ -264,7 +267,7 @@ public class QuizCoreTxService {
         .roomId(roomId)
         .questionSetId(questionSetId)
         .status(QuizRunStatus.RUNNING)
-        .startedAt(Instant.now())
+        .startedAt(Instant.now(clock))
         .build();
     return quizRunRepository.saveAndFlush(quizRun);
   }
@@ -277,7 +280,7 @@ public class QuizCoreTxService {
     }
 
     RunQuestion firstQuestion = questions.getFirst();
-    Instant openedAt = Instant.now();
+    Instant openedAt = Instant.now(clock);
     Instant closesAt = openedAt.plus(Duration.ofSeconds(firstQuestion.getTimeLimitSeconds()));
     firstQuestion.open(openedAt, closesAt);
     runQuestionRepository.save(firstQuestion);
@@ -301,7 +304,7 @@ public class QuizCoreTxService {
         .toList();
     QuestionOpenedMessage message = QuestionOpenedMessage.of(
         quizRun.getId(), question.getId(), questionNo, totalQuestions, question.getType(), question.getContent(),
-        question.getTimeLimitSeconds(), question.getClosesAt(), choices, Instant.now());
+        question.getTimeLimitSeconds(), question.getClosesAt(), choices, Instant.now(clock));
     eventPublisher.publishEvent(new QuizStateChangedEvent(quizRun.getRoomId(), message));
   }
 

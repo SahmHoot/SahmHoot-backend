@@ -18,7 +18,9 @@ import com.sahmhoot.quiz.entity.RunQuestionStatus;
 import com.sahmhoot.quiz.repository.AnswerRepository;
 import com.sahmhoot.quiz.repository.RunChoiceRepository;
 import com.sahmhoot.quiz.repository.RunQuestionRepository;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,6 +42,9 @@ class AnswerTxServiceTest {
   @Mock
   private RunChoiceRepository runChoiceRepository;
 
+  /** 테스트 시작 시각에 멈춘 시계. 서비스가 읽는 "지금"이 실행 중에 바뀌지 않는다. */
+  private final Clock clock = Clock.fixed(Instant.now(), ZoneOffset.UTC);
+
   private AnswerTxService answerTxService;
 
   @BeforeEach
@@ -47,7 +52,8 @@ class AnswerTxServiceTest {
     answerTxService = new AnswerTxService(
         answerRepository,
         runQuestionRepository,
-        runChoiceRepository
+        runChoiceRepository,
+        clock
     );
   }
 

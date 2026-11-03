@@ -29,6 +29,7 @@ import com.sahmhoot.quiz.service.port.QuestionSetSnapshot;
 import com.sahmhoot.quiz.service.port.RoomPort;
 import com.sahmhoot.quiz.service.port.RoomSnapshot;
 import com.sahmhoot.quiz.service.port.RoomStatus;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -127,6 +128,12 @@ class QuizCoreTransactionIntegrationTest {
       return mock(QuestionSetPort.class);
     }
 
+    /** 운영과 같은 진짜 시계. 이 테스트는 트랜잭션 경계만 보므로 시각을 고정할 필요가 없다. */
+    @Bean
+    public Clock clock() {
+      return Clock.systemUTC();
+    }
+
     @Bean
     public QuizCoreTxService quizCoreTxService(
         QuizRunRepository quizRunRepository,
@@ -135,7 +142,8 @@ class QuizCoreTransactionIntegrationTest {
         QuizResultService quizResultService,
         RoomPort roomPort,
         QuestionSetPort questionSetPort,
-        ApplicationEventPublisher eventPublisher
+        ApplicationEventPublisher eventPublisher,
+        Clock clock
     ) {
       return new QuizCoreTxService(
           quizRunRepository,
@@ -144,7 +152,8 @@ class QuizCoreTransactionIntegrationTest {
           quizResultService,
           roomPort,
           questionSetPort,
-          eventPublisher
+          eventPublisher,
+          clock
       );
     }
 
@@ -160,9 +169,10 @@ class QuizCoreTransactionIntegrationTest {
     public AnswerTxService answerTxService(
         AnswerRepository answerRepository,
         RunQuestionRepository runQuestionRepository,
-        RunChoiceRepository runChoiceRepository
+        RunChoiceRepository runChoiceRepository,
+        Clock clock
     ) {
-      return new AnswerTxService(answerRepository, runQuestionRepository, runChoiceRepository);
+      return new AnswerTxService(answerRepository, runQuestionRepository, runChoiceRepository, clock);
     }
 
     @Bean

@@ -34,7 +34,9 @@ import com.sahmhoot.quiz.service.port.QuestionSetSnapshot;
 import com.sahmhoot.quiz.service.port.RoomPort;
 import com.sahmhoot.quiz.service.port.RoomSnapshot;
 import com.sahmhoot.quiz.service.port.RoomStatus;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -70,6 +72,9 @@ class QuizCoreTxServiceTest {
   @Mock
   private ApplicationEventPublisher eventPublisher;
 
+  /** 테스트 시작 시각에 멈춘 시계. 서비스가 읽는 "지금"이 실행 중에 바뀌지 않는다. */
+  private final Clock clock = Clock.fixed(Instant.now(), ZoneOffset.UTC);
+
   private QuizCoreTxService quizCoreTxService;
 
   @BeforeEach
@@ -81,7 +86,8 @@ class QuizCoreTxServiceTest {
         quizResultService,
         roomPort,
         questionSetPort,
-        eventPublisher
+        eventPublisher,
+        clock
     );
   }
 
