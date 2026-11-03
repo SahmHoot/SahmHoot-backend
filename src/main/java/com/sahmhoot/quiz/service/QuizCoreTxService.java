@@ -28,6 +28,7 @@ import com.sahmhoot.quiz.service.port.RoomStatus;
 import java.time.Duration;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -237,7 +238,7 @@ public class QuizCoreTxService {
     }
 
     Instant now = Instant.now(clock);
-    Instant closesAt = now.plus(Duration.ofSeconds(question.getTimeLimitSeconds()));
+    Instant closesAt = closesAtFrom(now, question.getTimeLimitSeconds());
     question.open(now, closesAt);
     runQuestionRepository.save(question);
     publishQuestionOpened(quizRun, question, questionIndex + 1, questions.size());
@@ -283,11 +284,22 @@ public class QuizCoreTxService {
 
     RunQuestion firstQuestion = questions.getFirst();
     Instant openedAt = Instant.now(clock);
-    Instant closesAt = openedAt.plus(Duration.ofSeconds(firstQuestion.getTimeLimitSeconds()));
+    Instant closesAt = closesAtFrom(openedAt, firstQuestion.getTimeLimitSeconds());
     firstQuestion.open(openedAt, closesAt);
     runQuestionRepository.save(firstQuestion);
     publishQuestionOpened(quizRun, firstQuestion, 1, questions.size());
     return new StartQuizResponse(quizRun.getId(), questions.size(), firstQuestion.getId(), closesAt);
+  }
+
+  /**
+   * 문항 마감 시각. 여는 시각 + 제한시간을 초 단위로 올림한다(#23).
+   * closes_at 컬럼(datetime)은 초 미만을 반올림해 저장하므로, 소수점이 남으면 학생에게 보낸 마감 시각·
+   * 마감 예약 시각과 DB로 하는 답 검증 시각이 최대 0.5초 어긋난다. 올림이라 제한시간이 줄지는 않는다.
+   */
+  private Instant closesAtFrom(Instant openedAt, int timeLimitSeconds) {
+    Instant closesAt = openedAt.plus(Duration.ofSeconds(timeLimitSeconds));
+    Instant wholeSeconds = closesAt.truncatedTo(ChronoUnit.SECONDS);
+    return wholeSeconds.equals(closesAt) ? closesAt : wholeSeconds.plusSeconds(1);
   }
 
   private int findQuestionIndex(List<RunQuestion> questions, Long questionId) {

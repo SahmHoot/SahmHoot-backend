@@ -37,6 +37,7 @@ import com.sahmhoot.quiz.service.port.RoomStatus;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -72,8 +73,11 @@ class QuizCoreTxServiceTest {
   @Mock
   private ApplicationEventPublisher eventPublisher;
 
-  /** 테스트 시작 시각에 멈춘 시계. 서비스가 읽는 "지금"이 실행 중에 바뀌지 않는다. */
-  private final Clock clock = Clock.fixed(Instant.now(), ZoneOffset.UTC);
+  /**
+   * 테스트 시작 시각에 멈춘 시계. 서비스가 읽는 "지금"이 실행 중에 바뀌지 않는다.
+   * 마감 시각은 초 단위로 올림되므로, 기대값을 "지금 + 제한시간"으로 바로 쓸 수 있게 정수 초로 둔다.
+   */
+  private final Clock clock = Clock.fixed(Instant.now().truncatedTo(ChronoUnit.SECONDS), ZoneOffset.UTC);
 
   private QuizCoreTxService quizCoreTxService;
 
@@ -499,6 +503,28 @@ class QuizCoreTxServiceTest {
       assertThat(message.questionNo()).isEqualTo(2);
       assertThat(message.totalQuestions()).isEqualTo(2);
     });
+  }
+
+  @Test
+  @DisplayName("openQuestion: 초 미만 시각에 열면 마감 시각을 초 단위로 올림해 저장·발행·반환한다 (#23)")
+  void openQuestion_fractionalNow_roundsClosesAtUpToWholeSecond() {
+    QuizCoreTxService fractionalService = serviceAt(Instant.parse("2026-11-04T10:00:00.200Z"));
+    QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    RunQuestion first = RunQuestion.builder().id(810L).orderNo(1).status(RunQuestionStatus.CLOSED).build();
+    RunQuestion next = RunQuestion.builder().id(811L).quizRun(run).orderNo(2)
+        .status(RunQuestionStatus.READY).timeLimitSeconds(10).build();
+    given(quizRunRepository.findByIdAndRoomId(77L, 42L)).willReturn(Optional.of(run));
+    given(runQuestionRepository.findByQuizRunIdAndOrderNo(77L, 2)).willReturn(Optional.of(next));
+    given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(first, next));
+
+    OpenQuestionResult result = fractionalService.openQuestion(42L, 77L, 2);
+
+    // 10:00:00.200 + 10초 = 10:00:10.200 → 10:00:11. DB(datetime)에 그대로 저장돼 예약·답 검증과 같은 값이 된다.
+    Instant expected = Instant.parse("2026-11-04T10:00:11Z");
+    assertThat(result.closesAt()).isEqualTo(expected);
+    assertThat(next.getClosesAt()).isEqualTo(expected);
+    assertThat(publishedMessage()).isInstanceOfSatisfying(QuestionOpenedMessage.class,
+        message -> assertThat(message.closesAt()).isEqualTo(expected));
   }
 
   @Test
