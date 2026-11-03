@@ -2,9 +2,11 @@ package com.sahmhoot.quiz.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import com.sahmhoot.quiz.lock.RoomLockManager;
@@ -184,6 +186,69 @@ class QuizCoreServiceTest {
     capturedScheduledTask().run();
 
     verify(quizCoreTxService).closeQuestion(roomId, 811L);
+  }
+
+  @Test
+  @DisplayName("마지막이 아닌 문항이 닫히면 nextOpensAt에 한 번 예약하고, 실행하면 다음 문항을 연다")
+  void closeQuestion_notLast_schedulesNextQuestionAtNextOpensAt() {
+    Long roomId = 42L;
+    Instant nextOpensAt = Instant.parse("2026-11-04T10:00:24Z");
+    given(quizCoreTxService.closeQuestion(roomId, 811L)).willReturn(CloseQuestionResult.closed(
+        77L, 811L, 3001L, false, 2, nextOpensAt, Instant.parse("2026-11-04T10:00:21Z")));
+    given(quizCoreTxService.openQuestion(roomId, 77L, 2)).willReturn(OpenQuestionResult.ignored());
+
+    quizCoreService.closeQuestion(roomId, 811L);
+
+    verify(taskScheduler).schedule(eq(roomId), eq(nextOpensAt), any(Runnable.class));
+    capturedScheduledTask().run();
+    verify(quizCoreTxService).openQuestion(roomId, 77L, 2);
+    verify(quizCoreTxService, never()).finishQuiz(any(), any());
+  }
+
+  @Test
+  @DisplayName("마지막 문항이 닫히면 nextOpensAt에 한 번 예약하고, 실행하면 결과 처리를 한다")
+  void closeQuestion_last_schedulesFinishAtNextOpensAt() {
+    Long roomId = 42L;
+    Instant nextOpensAt = Instant.parse("2026-11-04T10:00:24Z");
+    given(quizCoreTxService.closeQuestion(roomId, 812L)).willReturn(CloseQuestionResult.closed(
+        77L, 812L, 3001L, true, null, nextOpensAt, Instant.parse("2026-11-04T10:00:21Z")));
+
+    quizCoreService.closeQuestion(roomId, 812L);
+
+    verify(taskScheduler).schedule(eq(roomId), eq(nextOpensAt), any(Runnable.class));
+    capturedScheduledTask().run();
+    verify(quizCoreTxService).finishQuiz(roomId, 77L);
+    verify(quizCoreTxService, never()).openQuestion(any(), any(), anyInt());
+  }
+
+  @Test
+  @DisplayName("닫지 않은 호출(이미 닫힘, 중단된 회차)은 다음 진행을 예약하지 않는다")
+  void closeQuestion_ignored_doesNotSchedule() {
+    given(quizCoreTxService.closeQuestion(42L, 811L)).willReturn(CloseQuestionResult.ignored());
+
+    quizCoreService.closeQuestion(42L, 811L);
+
+    verify(taskScheduler, never()).schedule(any(), any(), any());
+  }
+
+  @Test
+  @DisplayName("닫힘 → 3초 뒤 다음 문항 열림 → 그 문항의 마감이 다시 예약되어 진행이 이어진다")
+  void closeThenOpen_chainsNextClose() {
+    Long roomId = 42L;
+    Instant nextOpensAt = Instant.parse("2026-11-04T10:00:24Z");
+    Instant secondClosesAt = Instant.parse("2026-11-04T10:00:44Z");
+    given(quizCoreTxService.closeQuestion(roomId, 811L)).willReturn(CloseQuestionResult.closed(
+        77L, 811L, 3001L, false, 2, nextOpensAt, Instant.parse("2026-11-04T10:00:21Z")));
+    given(quizCoreTxService.openQuestion(roomId, 77L, 2))
+        .willReturn(OpenQuestionResult.opened(812L, secondClosesAt));
+
+    quizCoreService.closeQuestion(roomId, 811L);
+    capturedScheduledTask().run();   // 3초 뒤: 2번 문항 열기
+
+    ArgumentCaptor<Instant> runAts = ArgumentCaptor.forClass(Instant.class);
+    verify(taskScheduler, times(2)).schedule(eq(roomId), runAts.capture(), any(Runnable.class));
+    // 첫 예약은 다음 문항 열기, 두 번째는 2번 문항 마감(20초 + 1초)
+    assertThat(runAts.getAllValues()).containsExactly(nextOpensAt, Instant.parse("2026-11-04T10:00:45Z"));
   }
 
   /** 예약 도구에 넘긴 "할 일"을 꺼낸다. */

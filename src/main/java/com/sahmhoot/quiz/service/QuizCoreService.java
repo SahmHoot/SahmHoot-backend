@@ -57,8 +57,10 @@ public class QuizCoreService {
   }
 
   /**
-   * 문항 마감 처리 (시간 만료 또는 5번 AnswerService의 전원 응답 판정 시 호출).
-   * QUESTION_CLOSED는 트랜잭션 커밋 후 발행하며 다음 문항 예약은 후속 연동 작업이다.
+   * 문항 마감 처리 (마감 예약 실행 또는 5번 AnswerService의 전원 응답 판정 시 호출).
+   * QUESTION_CLOSED는 트랜잭션 커밋 후 발행한다. 실제로 닫았을 때만 nextOpensAt(닫힌 시각 + 3초)에
+   * 다음 문항 열기 또는 결과 처리를 예약한다. 이미 닫혔으면 아무것도 예약하지 않으므로, 조기 마감 뒤에
+   * 원래 마감 예약이 실행되어도 다음 진행이 두 번 걸리지 않는다.
    */
   public void closeQuestion(Long roomId, Long runQuestionId) {
     roomLockManager.executeWithLock(roomId, () -> {
@@ -67,13 +69,20 @@ public class QuizCoreService {
         return;
       }
 
-      // TODO: 3초 뒤 마지막 문항이면 finishQuiz, 아니면 다음 문항 openQuestion 예약
+      // 커밋 완료. 예약된 일은 아래 public 메서드를 다시 거치므로 실행 때 잠금·DB 재확인을 한다.
+      if (result.isLast()) {
+        taskScheduler.schedule(roomId, result.nextOpensAt(), () -> finishQuiz(roomId, result.runId()));
+      } else {
+        // 다음 문항이 열리면 openQuestion이 그 문항의 마감을 다시 예약해 진행이 이어진다.
+        taskScheduler.schedule(roomId, result.nextOpensAt(),
+            () -> openQuestion(roomId, result.runId(), result.nextOrderNo()));
+      }
     });
   }
 
   /**
    * 퀴즈 회차 종료 및 결과 집계.
-   * 후속 스케줄러 연동 시 마지막 문항 마감 3초 뒤 호출한다.
+   * 마지막 문항 마감 3초 뒤 예약으로 호출된다.
    */
   public QuizResultResponse finishQuiz(Long roomId, Long runId) {
     return roomLockManager.executeWithLock(roomId, () -> {
