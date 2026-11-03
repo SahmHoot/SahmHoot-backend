@@ -1,14 +1,19 @@
 package com.sahmhoot.quiz.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import com.sahmhoot.quiz.exception.BusinessException;
+import com.sahmhoot.quiz.exception.ErrorCode;
 import com.sahmhoot.quiz.lock.RoomLockManager;
 import com.sahmhoot.quiz.dto.QuizResultResponse;
 import com.sahmhoot.quiz.dto.StartQuizRequest;
@@ -21,6 +26,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -70,6 +76,27 @@ class QuizCoreServiceTest {
     quizCoreService.abortQuiz(roomId, runId, hostUserId);
 
     verify(quizCoreTxService).abortQuiz(roomId, runId, hostUserId);
+  }
+
+  @Test
+  @DisplayName("abortQuiz는 중단 커밋 뒤에 그 방의 예약을 모두 취소한다")
+  void abortQuiz_cancelsRoomTasksAfterAbort() {
+    quizCoreService.abortQuiz(42L, 77L, 1L);
+
+    InOrder order = inOrder(quizCoreTxService, taskScheduler);
+    order.verify(quizCoreTxService).abortQuiz(42L, 77L, 1L);
+    order.verify(taskScheduler).cancelAll(42L);
+  }
+
+  @Test
+  @DisplayName("중단이 실패하면 예약을 취소하지 않고 예외를 그대로 던진다")
+  void abortQuiz_failure_doesNotCancelTasks() {
+    BusinessException notRunning = new BusinessException(ErrorCode.QUIZ_NOT_RUNNING);
+    willThrow(notRunning).given(quizCoreTxService).abortQuiz(42L, 77L, 1L);
+
+    assertThatThrownBy(() -> quizCoreService.abortQuiz(42L, 77L, 1L)).isSameAs(notRunning);
+
+    verify(taskScheduler, never()).cancelAll(any());
   }
 
   @Test

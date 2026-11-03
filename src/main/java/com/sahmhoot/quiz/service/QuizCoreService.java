@@ -45,7 +45,9 @@ public class QuizCoreService {
   public void abortQuiz(Long roomId, Long runId, Long hostUserId) {
     roomLockManager.executeWithLock(roomId, () -> {
       quizCoreTxService.abortQuiz(roomId, runId, hostUserId);
-      // TODO: 해당 방의 스케줄러 예약 작업 취소
+      // 커밋 완료. 그 방의 남은 마감·다음 문항·결과 예약을 모두 취소한다.
+      // 커밋 뒤에 취소해야 중단 직전에 새로 걸린 예약까지 지울 수 있다. 중단이 예외로 실패하면 여기까지 오지 않는다.
+      taskScheduler.cancelAll(roomId);
     });
   }
 
