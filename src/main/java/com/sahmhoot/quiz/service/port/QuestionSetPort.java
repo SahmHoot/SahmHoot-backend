@@ -1,16 +1,23 @@
 package com.sahmhoot.quiz.service.port;
 
+import java.util.Optional;
+
 /**
  * 4번(QuestionSet - 용빈 담당) 도메인과의 연동을 위한 인터페이스(포트).
- * Question Set 담당이 구현하고 퀴즈가 사용하는 조회·실행 문항 복사 계약.
- * 소유자 권한은 반환된 hostId로 퀴즈 서비스가 검증한다.
+ * 퀴즈가 문제 세트 모듈에게 필요한 일을 적어 둔 목록이며, 실제 코드는 questionset 모듈의
+ * {@code QuizQuestionSetAdapter}에 있다. 퀴즈는 이 인터페이스만 알고 세트 모듈 내부는 모른다.
+ *
+ * <p>세트 모듈은 퀴즈 오류를 던지지 않는다. 세트가 없으면 {@link Optional#empty()}를 돌려주고,
+ * 어떤 오류로 응답할지는 퀴즈가 자기 {@code ErrorCode}로 정한다({@link RoomPort}와 같은 원칙).
+ *
+ * <p>소유자 권한은 반환된 hostId로 퀴즈 서비스가 검증한다.
  */
 public interface QuestionSetPort {
 
   /**
-   * 문제 세트 정보를 조회한다. 존재하지 않으면 QUESTION_SET_NOT_FOUND 예외를 던진다.
+   * 문제 세트 정보를 조회한다. 세트가 없으면 빈 값을 돌려준다.
    */
-  QuestionSetSnapshot getQuestionSet(Long questionSetId);
+  Optional<QuestionSetSnapshot> findQuestionSet(Long questionSetId);
 
   /**
    * 문제 세트의 문항과 선택지를 회차의 run_questions, run_choices로 복사한다.

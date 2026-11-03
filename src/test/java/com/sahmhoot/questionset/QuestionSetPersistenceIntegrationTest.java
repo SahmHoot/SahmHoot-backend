@@ -440,7 +440,7 @@ class QuestionSetPersistenceIntegrationTest {
     Long id = create(null);
     choices(question(id, 1));
     Long runId = quizRun(id, QuizRunStatus.ABORTED);
-    assertThat(quizPort.getQuestionSet(id).hostId()).isEqualTo(professor.id());
+    assertThat(quizPort.findQuestionSet(id).orElseThrow().hostId()).isEqualTo(professor.id());
     assertThat(quizPort.copyQuestionsToQuizRun(id, runId)).isEqualTo(1);
     var patch = new UpdateQuestionSetRequest();
     patch.readTitle("변경");

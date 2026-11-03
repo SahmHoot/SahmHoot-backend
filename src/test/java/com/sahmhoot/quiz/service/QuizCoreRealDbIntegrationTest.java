@@ -62,7 +62,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 실제 DB(sahmhoot_test) 기반 퀴즈 전체 라이프사이클 및 변경 저장 통합 테스트.
- * - JdbcQuestionSetPort, JdbcRoomPort의 실제 SQL 동작 검증
+ * - RoomPort(방 모듈 QuizRoomAdapter)와 QuestionSetPort(세트 모듈 QuizQuestionSetAdapter)의 실제 DB 동작 검증
  * - JPA - JDBC 간 동일 트랜잭션 공유 및 롤백 검증
  * - 퀴즈 시작 -> 문항 열림 -> 답안 제출/수정 -> 문항 마감 -> 퀴즈 종료 -> 결과 집계 -> 대기 복귀의 실제 DB 영속성 검증
  */
@@ -272,7 +272,7 @@ class QuizCoreRealDbIntegrationTest {
     String runStatus = jdbcTemplate.queryForObject("SELECT status FROM quiz_runs WHERE id = ?", String.class, runId);
     assertThat(runStatus).isEqualTo("RUNNING");
 
-    // DB 검증: JdbcQuestionSetPort가 run_questions 및 run_choices에 스냅샷을 올바르게 복사했는지
+    // DB 검증: QuestionSetPort가 run_questions 및 run_choices에 스냅샷을 올바르게 복사했는지
     Integer copiedQuestionsCount = jdbcTemplate.queryForObject(
         "SELECT count(*) FROM run_questions WHERE quiz_run_id = ?", Integer.class, runId);
     assertThat(copiedQuestionsCount).isEqualTo(2);
@@ -527,41 +527,29 @@ class QuizCoreRealDbIntegrationTest {
   }
 
   @Test
-  @DisplayName("실제 DB: JdbcRoomPort 및 JdbcQuestionSetPort 기본 CRUD 및 예외 처리 검증")
+  @DisplayName("실제 DB: RoomPort(방 모듈 구현) 및 QuestionSetPort(세트 모듈 구현) 기본 조회 검증")
   void ports_directDbVerification() {
-    // 1. JdbcRoomPort
-    RoomSnapshot room = roomPort.getRoom(ROOM_ID);
+    // 1. RoomPort: 방 모듈의 QuizRoomAdapter가 실행된다.
+    RoomSnapshot room = roomPort.findRoom(ROOM_ID).orElseThrow();
     assertThat(room.id()).isEqualTo(ROOM_ID);
     assertThat(room.hostId()).isEqualTo(HOST_USER_ID);
     assertThat(room.status()).isEqualTo(RoomStatus.OPEN);
 
     // 참가자 ID 조회
-    Long participantId = roomPort.findParticipantId(ROOM_ID, STUDENT_1_USER_ID);
-    assertThat(participantId).isEqualTo(PARTICIPANT_1_ID);
+    assertThat(roomPort.findParticipantId(ROOM_ID, STUDENT_1_USER_ID)).contains(PARTICIPANT_1_ID);
 
-    // 없는 참가자 예외
-    assertThatThrownBy(() -> roomPort.findParticipantId(ROOM_ID, 9999L))
-        .isInstanceOf(BusinessException.class)
-        .extracting(e -> ((BusinessException) e).getErrorCode())
-        .isEqualTo(ErrorCode.NOT_PARTICIPANT);
+    // 없는 참가자·없는 방은 오류 대신 빈 값 (오류는 퀴즈 서비스가 판단한다)
+    assertThat(roomPort.findParticipantId(ROOM_ID, 9999L)).isEmpty();
+    assertThat(roomPort.findRoom(9999L)).isEmpty();
 
-    // 없는 방 예외
-    assertThatThrownBy(() -> roomPort.getRoom(9999L))
-        .isInstanceOf(BusinessException.class)
-        .extracting(e -> ((BusinessException) e).getErrorCode())
-        .isEqualTo(ErrorCode.ROOM_NOT_FOUND);
-
-    // 2. JdbcQuestionSetPort
-    QuestionSetSnapshot qs = questionSetPort.getQuestionSet(QUESTION_SET_ID);
+    // 2. QuestionSetPort: 세트 모듈의 QuizQuestionSetAdapter가 실행된다.
+    QuestionSetSnapshot qs = questionSetPort.findQuestionSet(QUESTION_SET_ID).orElseThrow();
     assertThat(qs.id()).isEqualTo(QUESTION_SET_ID);
     assertThat(qs.hostId()).isEqualTo(HOST_USER_ID);
     assertThat(qs.title()).isEqualTo("스택과 큐 퀴즈");
 
-    // 없는 세트 예외
-    assertThatThrownBy(() -> questionSetPort.getQuestionSet(9999L))
-        .isInstanceOf(BusinessException.class)
-        .extracting(e -> ((BusinessException) e).getErrorCode())
-        .isEqualTo(ErrorCode.QUESTION_SET_NOT_FOUND);
+    // 없는 세트는 오류 대신 빈 값 (오류는 퀴즈 서비스가 판단한다)
+    assertThat(questionSetPort.findQuestionSet(9999L)).isEmpty();
   }
 
   @Test
@@ -569,14 +557,29 @@ class QuizCoreRealDbIntegrationTest {
   void roomPortStatusUpdateRequiresCallerTransaction() {
     assertThatThrownBy(() -> roomPort.updateStatus(ROOM_ID, RoomStatus.PLAYING))
         .isInstanceOf(IllegalTransactionStateException.class);
-    assertThat(roomPort.getRoom(ROOM_ID).status()).isEqualTo(RoomStatus.OPEN);
+    assertThat(roomPort.findRoom(ROOM_ID).orElseThrow().status()).isEqualTo(RoomStatus.OPEN);
 
     new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
       roomPort.updateStatus(ROOM_ID, RoomStatus.PLAYING);
-      assertThat(roomPort.getRoom(ROOM_ID).status()).isEqualTo(RoomStatus.PLAYING);
+      assertThat(roomPort.findRoom(ROOM_ID).orElseThrow().status()).isEqualTo(RoomStatus.PLAYING);
       status.setRollbackOnly();
     });
-    assertThat(roomPort.getRoom(ROOM_ID).status()).isEqualTo(RoomStatus.OPEN);
+    assertThat(roomPort.findRoom(ROOM_ID).orElseThrow().status()).isEqualTo(RoomStatus.OPEN);
+  }
+
+  @Test
+  @DisplayName("RoomPort 상태 변경은 방 엔티티의 전환 규칙을 따른다 (대기 방 대기 복귀·종료 전환·없는 방 거부)")
+  void roomPortStatusUpdateFollowsRoomTransitionRules() {
+    new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+      assertThatThrownBy(() -> roomPort.updateStatus(ROOM_ID, RoomStatus.OPEN))
+          .isInstanceOf(IllegalStateException.class);
+      assertThatThrownBy(() -> roomPort.updateStatus(ROOM_ID, RoomStatus.CLOSED))
+          .isInstanceOf(IllegalArgumentException.class);
+      assertThatThrownBy(() -> roomPort.updateStatus(9999L, RoomStatus.PLAYING))
+          .isInstanceOf(IllegalStateException.class);
+      status.setRollbackOnly();
+    });
+    assertThat(roomPort.findRoom(ROOM_ID).orElseThrow().status()).isEqualTo(RoomStatus.OPEN);
   }
 
   @Test
