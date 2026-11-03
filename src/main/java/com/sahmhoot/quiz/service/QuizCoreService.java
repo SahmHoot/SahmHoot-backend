@@ -4,6 +4,8 @@ import com.sahmhoot.quiz.lock.RoomLockManager;
 import com.sahmhoot.quiz.dto.QuizResultResponse;
 import com.sahmhoot.quiz.dto.StartQuizRequest;
 import com.sahmhoot.quiz.dto.StartQuizResponse;
+import com.sahmhoot.quiz.schedule.QuizTaskScheduler;
+import java.time.Instant;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -12,6 +14,9 @@ import org.springframework.stereotype.Service;
  * 1. Quiz Core: 퀴즈 시작 / 문제 진행 / 타이머 / 종료 서비스 코디네이터.
  * 방 단위 잠금(RoomLockManager)을 획득한 후 별도의 스프링 빈인 QuizCoreTxService를 호출하여
  * "잠금 획득 -> 트랜잭션 서비스 호출(커밋) -> 잠금 해제" 아키텍처를 준수한다.
+ *
+ * <p>자동 진행 예약(#23)은 트랜잭션 서비스 호출이 끝난 뒤(커밋 완료), 잠금을 놓기 전에 등록한다.
+ * 트랜잭션 도중에 예약하면 롤백된 상태의 예약이 남거나, 커밋 전에 실행되어 DB에 없는 문항을 볼 수 있다.
  */
 @Slf4j
 @Service
@@ -20,6 +25,7 @@ public class QuizCoreService {
 
   private final RoomLockManager roomLockManager;
   private final QuizCoreTxService quizCoreTxService;
+  private final QuizTaskScheduler taskScheduler;
 
   /**
    * 05 API 명세 23번 퀴즈 시작 (POST /api/rooms/{roomId}/quiz-runs).
@@ -27,7 +33,8 @@ public class QuizCoreService {
   public StartQuizResponse startQuiz(Long roomId, StartQuizRequest request, Long hostUserId) {
     return roomLockManager.executeWithLock(roomId, () -> {
       StartQuizResponse response = quizCoreTxService.startQuiz(roomId, request, hostUserId);
-      // TODO: 1번 문항 마감 예약 등록 (Scheduler)
+      // 커밋 완료. 1번 문항 마감을 예약한다.
+      scheduleClose(roomId, response.firstRunQuestionId(), response.closesAt());
       return response;
     });
   }
@@ -83,8 +90,22 @@ public class QuizCoreService {
    */
   public void openQuestion(Long roomId, Long runId, int orderNo) {
     roomLockManager.executeWithLock(roomId, () -> {
-      quizCoreTxService.openQuestion(roomId, runId, orderNo);
-      // TODO: 문항 마감 예약 등록 (closesAt + 1s)
+      OpenQuestionResult result = quizCoreTxService.openQuestion(roomId, runId, orderNo);
+      // 이미 열렸거나 중단된 회차라 아무것도 하지 않았으면 예약도 걸지 않는다.
+      if (!result.opened()) {
+        return;
+      }
+      // 커밋 완료. 방금 연 문항의 마감을 예약한다.
+      scheduleClose(roomId, result.runQuestionId(), result.closesAt());
     });
+  }
+
+  /**
+   * 문항 마감 예약. 06 규격 5절에 따라 closes_at + 1초까지 답을 받으므로 그 시각에 닫는다.
+   * 예약이 실행될 때 이미 닫혔거나(전원 응답 조기 마감) 회차가 중단됐으면
+   * closeQuestion이 DB 상태를 보고 아무것도 하지 않는다.
+   */
+  private void scheduleClose(Long roomId, Long runQuestionId, Instant closesAt) {
+    taskScheduler.schedule(roomId, closesAt.plusSeconds(1), () -> closeQuestion(roomId, runQuestionId));
   }
 }

@@ -211,28 +211,29 @@ public class QuizCoreTxService {
 
   /**
    * 다음 문항 열기 트랜잭션.
+   * 실제로 열었으면 마감 예약에 쓸 문항 ID와 closesAt을, 아무것도 하지 않았으면 ignored()를 돌려준다.
    */
   @Transactional
-  public void openQuestion(Long roomId, Long runId, int orderNo) {
+  public OpenQuestionResult openQuestion(Long roomId, Long runId, int orderNo) {
     QuizRun quizRun = quizRunRepository.findByIdAndRoomId(runId, roomId)
         .orElseThrow(() -> new BusinessException(ErrorCode.QUIZ_RUN_NOT_FOUND));
 
     if (!quizRun.isRunning()) {
-      return;
+      return OpenQuestionResult.ignored();
     }
 
     RunQuestion question = runQuestionRepository.findByQuizRunIdAndOrderNo(runId, orderNo)
         .orElseThrow(() -> new BusinessException(ErrorCode.QUESTION_NOT_FOUND));
 
     if (!question.isReady()) {
-      return;
+      return OpenQuestionResult.ignored();
     }
 
     List<RunQuestion> questions = runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(runId);
     int questionIndex = findQuestionIndex(questions, question.getId());
     if (questions.stream().anyMatch(RunQuestion::isOpen)
         || questions.subList(0, questionIndex).stream().anyMatch(previous -> !previous.isClosed())) {
-      return;
+      return OpenQuestionResult.ignored();
     }
 
     Instant now = Instant.now(clock);
@@ -241,6 +242,7 @@ public class QuizCoreTxService {
     runQuestionRepository.save(question);
     publishQuestionOpened(quizRun, question, questionIndex + 1, questions.size());
     log.info("Opened runQuestionId={} (orderNo={}) until {}", question.getId(), orderNo, closesAt);
+    return OpenQuestionResult.opened(question.getId(), closesAt);
   }
 
   private RoomSnapshot getRoomOwnedBy(Long roomId, Long hostUserId) {

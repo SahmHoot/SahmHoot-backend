@@ -188,4 +188,30 @@ class AnswerTxServiceTest {
         .extracting(e -> ((BusinessException) e).getErrorCode())
         .isEqualTo(ErrorCode.QUESTION_CLOSED);
   }
+
+  @Test
+  @DisplayName("문항이 아직 OPEN이어도 서버 시각이 closesAt + 1초를 넘으면 QUESTION_CLOSED로 거부한다 (#23)")
+  void submitAnswer_afterClosesAtPlusOneSecond_throwsQuestionClosed() {
+    Long roomId = 42L;
+    Long runQuestionId = 812L;
+    QuizRun quizRun = QuizRun.builder().id(77L).roomId(roomId).status(QuizRunStatus.RUNNING).build();
+    // 마감 예약이 아직 실행되지 않아 상태는 OPEN이지만, 마감 시각은 2초 전에 지났다.
+    RunQuestion question = RunQuestion.builder()
+        .id(runQuestionId)
+        .quizRun(quizRun)
+        .status(RunQuestionStatus.OPEN)
+        .closesAt(Instant.now(clock).minusSeconds(2))
+        .build();
+    given(runQuestionRepository.findById(runQuestionId)).willReturn(Optional.of(question));
+
+    assertThatThrownBy(() -> answerTxService.submitAnswer(
+        roomId,
+        900L,
+        new SubmitAnswerRequest(runQuestionId, 3001L),
+        Set.of(900L)
+    ))
+        .isInstanceOf(BusinessException.class)
+        .extracting(e -> ((BusinessException) e).getErrorCode())
+        .isEqualTo(ErrorCode.QUESTION_CLOSED);
+  }
 }

@@ -486,8 +486,14 @@ class QuizCoreTxServiceTest {
     given(runQuestionRepository.findByQuizRunIdAndOrderNo(77L, 7)).willReturn(Optional.of(next));
     given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(first, next));
 
-    quizCoreTxService.openQuestion(42L, 77L, 7);
-    quizCoreTxService.openQuestion(42L, 77L, 7);
+    OpenQuestionResult firstCall = quizCoreTxService.openQuestion(42L, 77L, 7);
+    OpenQuestionResult secondCall = quizCoreTxService.openQuestion(42L, 77L, 7);
+
+    // 처음 호출만 "열었음"과 마감 예약에 쓸 값을 돌려주고, 중복 호출은 ignored라 예약도 걸리지 않는다.
+    assertThat(firstCall.opened()).isTrue();
+    assertThat(firstCall.runQuestionId()).isEqualTo(811L);
+    assertThat(firstCall.closesAt()).isEqualTo(Instant.now(clock).plusSeconds(15));
+    assertThat(secondCall.opened()).isFalse();
 
     assertThat(publishedMessage()).isInstanceOfSatisfying(QuestionOpenedMessage.class, message -> {
       assertThat(message.questionNo()).isEqualTo(2);
@@ -509,7 +515,7 @@ class QuizCoreTxServiceTest {
     given(runQuestionRepository.findByQuizRunIdAndOrderNo(77L, 3)).willReturn(Optional.of(third));
     given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(first, second, third));
 
-    quizCoreTxService.openQuestion(42L, 77L, 2);
+    assertThat(quizCoreTxService.openQuestion(42L, 77L, 2).opened()).isFalse();
     assertThat(second.isReady()).isTrue();
     verifyNoInteractions(eventPublisher);
 
@@ -537,6 +543,57 @@ class QuizCoreTxServiceTest {
       assertThat(run.isRunning()).isTrue();
     }
     verifyNoInteractions(eventPublisher, quizResultService);
+  }
+
+  @Test
+  @DisplayName("closeQuestion: 이미 닫힌 문항에 늦은 마감 예약이 실행되면 아무것도 바꾸지 않고 발행하지 않는다 (#23)")
+  void closeQuestion_alreadyClosed_lateScheduledCallDoesNothing() {
+    Instant closedAt = Instant.parse("2026-11-04T10:00:05Z");
+    QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    // 전원 응답으로 마감 예정 시각(10:00:20)보다 먼저 닫힌 문항
+    RunQuestion question = RunQuestion.builder().id(811L).quizRun(run).orderNo(1)
+        .status(RunQuestionStatus.CLOSED).closesAt(Instant.parse("2026-11-04T10:00:20Z")).closedAt(closedAt).build();
+    given(runQuestionRepository.findById(811L)).willReturn(Optional.of(question));
+
+    CloseQuestionResult result = quizCoreTxService.closeQuestion(42L, 811L);
+
+    assertThat(result.processed()).isFalse();
+    assertThat(question.getClosedAt()).isEqualTo(closedAt);
+    verify(runQuestionRepository, never()).save(any());
+    verifyNoInteractions(eventPublisher);
+  }
+
+  @Test
+  @DisplayName("closeQuestion: 마감 예약이 늦게 실행돼도 닫힌 시각은 closesAt + 1초로 기록된다 (#23)")
+  void closeQuestion_lateExecution_recordsClosesAtPlusOneSecond() {
+    Instant closesAt = Instant.parse("2026-11-04T10:00:20Z");
+    // 가짜 시계: 마감 예정 시각보다 5초 늦게 실행된 상황
+    QuizCoreTxService lateService = serviceAt(Instant.parse("2026-11-04T10:00:25Z"));
+    QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    RunQuestion question = RunQuestion.builder().id(811L).quizRun(run).orderNo(1)
+        .status(RunQuestionStatus.OPEN).closesAt(closesAt).build();
+    given(runQuestionRepository.findById(811L)).willReturn(Optional.of(question));
+    given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(question));
+
+    CloseQuestionResult result = lateService.closeQuestion(42L, 811L);
+
+    assertThat(result.processed()).isTrue();
+    assertThat(question.getClosedAt()).isEqualTo(Instant.parse("2026-11-04T10:00:21Z"));
+    assertThat(result.nextOpensAt()).isEqualTo(Instant.parse("2026-11-04T10:00:24Z"));
+  }
+
+  /** 지정한 시각에 멈춘 시계로 서비스를 하나 더 만든다. 목은 이 테스트 클래스의 것을 그대로 쓴다. */
+  private QuizCoreTxService serviceAt(Instant now) {
+    return new QuizCoreTxService(
+        quizRunRepository,
+        runQuestionRepository,
+        runChoiceRepository,
+        quizResultService,
+        roomPort,
+        questionSetPort,
+        eventPublisher,
+        Clock.fixed(now, ZoneOffset.UTC)
+    );
   }
 
   private QuizMessage publishedMessage() {

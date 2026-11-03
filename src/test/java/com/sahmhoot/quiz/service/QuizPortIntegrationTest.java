@@ -22,6 +22,7 @@ import com.sahmhoot.quiz.exception.BusinessException;
 import com.sahmhoot.quiz.exception.ErrorCode;
 import com.sahmhoot.quiz.repository.RunChoiceRepository;
 import com.sahmhoot.quiz.repository.RunQuestionRepository;
+import com.sahmhoot.quiz.schedule.QuizTaskScheduler;
 import com.sahmhoot.room.dto.CreateRoomRequest;
 import com.sahmhoot.room.service.RoomManagementService;
 import com.sahmhoot.room.service.RoomService;
@@ -63,6 +64,8 @@ class QuizPortIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   /** 실시간 메시지 발행은 이 테스트의 관심사가 아니라 가짜로 둔다. */
   @MockitoBean SimpMessagingTemplate messaging;
+  /** 마감 예약은 이 테스트의 관심사가 아니다. 진짜 예약이 남아 정리된 DB에 늦게 실행되지 않도록 가짜로 둔다. */
+  @MockitoBean QuizTaskScheduler taskScheduler;
 
   private User professor;
   private User otherProfessor;
