@@ -62,7 +62,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 실제 DB(sahmhoot_test) 기반 퀴즈 전체 라이프사이클 및 변경 저장 통합 테스트.
- * - RoomPort(방 모듈 QuizRoomAdapter)와 JdbcQuestionSetPort의 실제 DB 동작 검증
+ * - RoomPort(방 모듈 QuizRoomAdapter)와 QuestionSetPort(세트 모듈 QuizQuestionSetAdapter)의 실제 DB 동작 검증
  * - JPA - JDBC 간 동일 트랜잭션 공유 및 롤백 검증
  * - 퀴즈 시작 -> 문항 열림 -> 답안 제출/수정 -> 문항 마감 -> 퀴즈 종료 -> 결과 집계 -> 대기 복귀의 실제 DB 영속성 검증
  */
@@ -272,7 +272,7 @@ class QuizCoreRealDbIntegrationTest {
     String runStatus = jdbcTemplate.queryForObject("SELECT status FROM quiz_runs WHERE id = ?", String.class, runId);
     assertThat(runStatus).isEqualTo("RUNNING");
 
-    // DB 검증: JdbcQuestionSetPort가 run_questions 및 run_choices에 스냅샷을 올바르게 복사했는지
+    // DB 검증: QuestionSetPort가 run_questions 및 run_choices에 스냅샷을 올바르게 복사했는지
     Integer copiedQuestionsCount = jdbcTemplate.queryForObject(
         "SELECT count(*) FROM run_questions WHERE quiz_run_id = ?", Integer.class, runId);
     assertThat(copiedQuestionsCount).isEqualTo(2);
@@ -527,7 +527,7 @@ class QuizCoreRealDbIntegrationTest {
   }
 
   @Test
-  @DisplayName("실제 DB: RoomPort(방 모듈 구현) 및 JdbcQuestionSetPort 기본 조회 검증")
+  @DisplayName("실제 DB: RoomPort(방 모듈 구현) 및 QuestionSetPort(세트 모듈 구현) 기본 조회 검증")
   void ports_directDbVerification() {
     // 1. RoomPort: 방 모듈의 QuizRoomAdapter가 실행된다.
     RoomSnapshot room = roomPort.findRoom(ROOM_ID).orElseThrow();
@@ -542,17 +542,14 @@ class QuizCoreRealDbIntegrationTest {
     assertThat(roomPort.findParticipantId(ROOM_ID, 9999L)).isEmpty();
     assertThat(roomPort.findRoom(9999L)).isEmpty();
 
-    // 2. JdbcQuestionSetPort
-    QuestionSetSnapshot qs = questionSetPort.getQuestionSet(QUESTION_SET_ID);
+    // 2. QuestionSetPort: 세트 모듈의 QuizQuestionSetAdapter가 실행된다.
+    QuestionSetSnapshot qs = questionSetPort.findQuestionSet(QUESTION_SET_ID).orElseThrow();
     assertThat(qs.id()).isEqualTo(QUESTION_SET_ID);
     assertThat(qs.hostId()).isEqualTo(HOST_USER_ID);
     assertThat(qs.title()).isEqualTo("스택과 큐 퀴즈");
 
-    // 없는 세트 예외
-    assertThatThrownBy(() -> questionSetPort.getQuestionSet(9999L))
-        .isInstanceOf(BusinessException.class)
-        .extracting(e -> ((BusinessException) e).getErrorCode())
-        .isEqualTo(ErrorCode.QUESTION_SET_NOT_FOUND);
+    // 없는 세트는 오류 대신 빈 값 (오류는 퀴즈 서비스가 판단한다)
+    assertThat(questionSetPort.findQuestionSet(9999L)).isEmpty();
   }
 
   @Test

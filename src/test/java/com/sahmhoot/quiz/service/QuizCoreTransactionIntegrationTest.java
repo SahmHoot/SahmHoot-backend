@@ -243,7 +243,7 @@ class QuizCoreTransactionIntegrationTest {
 
     given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN)));
     given(quizRunRepository.existsByRoomIdAndStatus(roomId, QuizRunStatus.RUNNING)).willReturn(false);
-    given(questionSetPort.getQuestionSet(questionSetId)).willReturn(new QuestionSetSnapshot(questionSetId, hostUserId, "자료구조"));
+    given(questionSetPort.findQuestionSet(questionSetId)).willReturn(Optional.of(new QuestionSetSnapshot(questionSetId, hostUserId, "자료구조")));
 
     QuizRun savedRun = QuizRun.builder()
         .id(77L)

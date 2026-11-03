@@ -251,7 +251,9 @@ public class QuizCoreTxService {
   }
 
   private void validateQuestionSetOwner(Long questionSetId, Long hostUserId) {
-    QuestionSetSnapshot questionSet = questionSetPort.getQuestionSet(questionSetId);
+    // 세트 모듈은 "없음"만 알려 주고, 어떤 오류로 응답할지는 퀴즈가 정한다.
+    QuestionSetSnapshot questionSet = questionSetPort.findQuestionSet(questionSetId)
+        .orElseThrow(() -> new BusinessException(ErrorCode.QUESTION_SET_NOT_FOUND));
     if (!questionSet.hostId().equals(hostUserId)) {
       throw new BusinessException(ErrorCode.FORBIDDEN, "자신이 작성한 문제 세트만 선택할 수 있습니다.");
     }

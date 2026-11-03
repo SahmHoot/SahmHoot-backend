@@ -118,6 +118,25 @@ class QuizCoreTxServiceTest {
   }
 
   @Test
+  @DisplayName("startQuiz: 문제 세트가 존재하지 않으면 QUESTION_SET_NOT_FOUND 예외를 던지고 회차를 만들지 않는다")
+  void startQuiz_questionSetNotFound_throwsQuestionSetNotFound() {
+    Long roomId = 42L;
+    Long hostUserId = 1L;
+    StartQuizRequest request = new StartQuizRequest(7L);
+
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN)));
+    given(quizRunRepository.existsByRoomIdAndStatus(roomId, QuizRunStatus.RUNNING)).willReturn(false);
+    // 세트 모듈은 세트가 없으면 빈 값만 돌려주고, QUESTION_SET_NOT_FOUND 오류는 퀴즈가 직접 던진다.
+    given(questionSetPort.findQuestionSet(7L)).willReturn(Optional.empty());
+
+    assertThatThrownBy(() -> quizCoreTxService.startQuiz(roomId, request, hostUserId))
+        .isInstanceOf(BusinessException.class)
+        .extracting(e -> ((BusinessException) e).getErrorCode())
+        .isEqualTo(ErrorCode.QUESTION_SET_NOT_FOUND);
+    verify(quizRunRepository, never()).saveAndFlush(any(QuizRun.class));
+  }
+
+  @Test
   @DisplayName("startQuiz: 방이 OPEN이 아니면(PLAYING) QUIZ_ALREADY_RUNNING 예외를 던진다 (Issue 5)")
   void startQuiz_roomPlaying_throwsQuizAlreadyRunning() {
     Long roomId = 42L;
@@ -143,7 +162,7 @@ class QuizCoreTxServiceTest {
 
     given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN)));
     given(quizRunRepository.existsByRoomIdAndStatus(roomId, QuizRunStatus.RUNNING)).willReturn(false);
-    given(questionSetPort.getQuestionSet(questionSetId)).willReturn(new QuestionSetSnapshot(questionSetId, otherHostId, "다른 소유자의 세트"));
+    given(questionSetPort.findQuestionSet(questionSetId)).willReturn(Optional.of(new QuestionSetSnapshot(questionSetId, otherHostId, "다른 소유자의 세트")));
 
     assertThatThrownBy(() -> quizCoreTxService.startQuiz(roomId, request, hostUserId))
         .isInstanceOf(BusinessException.class)
@@ -161,7 +180,7 @@ class QuizCoreTxServiceTest {
 
     given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN)));
     given(quizRunRepository.existsByRoomIdAndStatus(roomId, QuizRunStatus.RUNNING)).willReturn(false);
-    given(questionSetPort.getQuestionSet(questionSetId)).willReturn(new QuestionSetSnapshot(questionSetId, hostUserId, "자료구조"));
+    given(questionSetPort.findQuestionSet(questionSetId)).willReturn(Optional.of(new QuestionSetSnapshot(questionSetId, hostUserId, "자료구조")));
 
     QuizRun savedRun = QuizRun.builder()
         .id(77L)
@@ -212,7 +231,7 @@ class QuizCoreTxServiceTest {
 
     given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN)));
     given(quizRunRepository.existsByRoomIdAndStatus(roomId, QuizRunStatus.RUNNING)).willReturn(false);
-    given(questionSetPort.getQuestionSet(questionSetId)).willReturn(new QuestionSetSnapshot(questionSetId, hostUserId, "빈 세트"));
+    given(questionSetPort.findQuestionSet(questionSetId)).willReturn(Optional.of(new QuestionSetSnapshot(questionSetId, hostUserId, "빈 세트")));
 
     QuizRun savedRun = QuizRun.builder()
         .id(77L)
