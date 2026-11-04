@@ -19,6 +19,8 @@ import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
@@ -95,6 +97,28 @@ class RoomEntryServiceTest {
     assertThat(participant.getLeftAt()).isNull();
     verify(participants, never()).saveAndFlush(any());
     verify(participants, never()).existsByRoomIdAndNickname(anyLong(), anyString());
+  }
+
+  @Test void lookupOfLeftParticipantKeepsNicknameButDoesNotSkipReentry() {
+    RoomParticipant participant = new RoomParticipant(42L, 2L, "기존학생");
+    ReflectionTestUtils.setField(participant, "leftAt", Instant.now());
+    when(participants.findByRoomIdAndUserId(42L, 2L)).thenReturn(Optional.of(participant));
+
+    var response = service.byCode(2L, "123456");
+
+    assertThat(response.joined()).isFalse();
+    assertThat(response.myNickname()).isEqualTo("기존학생");
+    assertThat(participant.getLeftAt()).isNotNull();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"교\u200B수", "\u1100\u116D\u1109\u116E",
+      "\u00A0\u00A0", "\u200B\u200B", "\u3164\u3164", "가\u0001나"})
+  void invalidNicknameDoesNotCreateParticipant(String nickname) {
+    assertError(() -> service.join(2L, "123456", new JoinRoomRequest(nickname)),
+        RoomErrorCode.NICKNAME_NOT_ALLOWED);
+    verify(participants, never()).saveAndFlush(any());
+    verify(transactions).rollback(any());
   }
 
   @Test void closedBetweenCodeLookupAndTransactionCannotBeJoined() {

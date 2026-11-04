@@ -49,7 +49,7 @@ public class RoomEntryService {
     var owner = users.findById(room.getHostId())
         .orElseThrow(() -> new RoomException(RoomErrorCode.ROOM_NOT_FOUND));
     return new RoomByCodeResponse(room.getId(), room.getTitle(), owner.name(), room.getStatus(),
-        participant.isPresent(), room.getHostId().equals(userId),
+        participant.filter(found -> found.getLeftAt() == null).isPresent(), room.getHostId().equals(userId),
         participant.map(RoomParticipant::getNickname).orElse(null));
   }
 
@@ -67,16 +67,27 @@ public class RoomEntryService {
         existing.get().rejoin();
         return new EntryResult(JoinRoomResponse.from(existing.get()), false);
       }
-      if (request.nickname().contains("교수")) {
+      String nickname = request.nickname();
+      // 제어·서식·채움 문자는 금지어 사이에 끼운 경우도 포함해 거부한다.
+      if (nickname.contains("교수")
+          || nickname.codePoints().anyMatch(RoomEntryService::isDisallowedNicknameCharacter)
+          || nickname.codePoints().allMatch(codePoint ->
+              Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint))) {
         throw new RoomException(RoomErrorCode.NICKNAME_NOT_ALLOWED);
       }
-      if (participants.existsByRoomIdAndNickname(roomId, request.nickname())) {
+      if (participants.existsByRoomIdAndNickname(roomId, nickname)) {
         throw new RoomException(RoomErrorCode.NICKNAME_ALREADY_USED);
       }
       RoomParticipant participant = participants.saveAndFlush(
-          new RoomParticipant(room.getId(), userId, request.nickname()));
+          new RoomParticipant(room.getId(), userId, nickname));
       return new EntryResult(JoinRoomResponse.from(participant), true);
     }));
+  }
+
+  private static boolean isDisallowedNicknameCharacter(int codePoint) {
+    return Character.isISOControl(codePoint) || Character.getType(codePoint) == Character.FORMAT
+        // Hangul choseong/jungseong filler, Hangul filler, halfwidth Hangul filler.
+        || codePoint == 0x115F || codePoint == 0x1160 || codePoint == 0x3164 || codePoint == 0xFFA0;
   }
 
   private void checkAccess(Long userId) {

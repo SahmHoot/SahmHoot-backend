@@ -14,6 +14,7 @@ import com.sahmhoot.room.service.JoinCodeGenerator;
 import com.sahmhoot.user.Role;
 import com.sahmhoot.user.User;
 import com.sahmhoot.user.UserRepository;
+import java.text.Normalizer;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -105,10 +106,46 @@ class RoomEntryIntegrationTest {
   @Test void previouslyLeftParticipantIsReactivatedInSameRow() throws Exception {
     var original = participants.saveAndFlush(new RoomParticipant(room.getId(), student.getId(), "기존학생"));
     jdbc.update("UPDATE room_participants SET left_at = UTC_TIMESTAMP() WHERE id = ?", original.getId());
-    join(student, "{\"nickname\":\"새닉네임\"}").andExpect(status().isOk())
+    perform(get(path()), student).andExpect(status().isOk())
+        .andExpect(jsonPath("$.joined").value(false))
+        .andExpect(jsonPath("$.myNickname").value("기존학생"));
+    join(student, "{\"nickname\":\"기존학생\"}").andExpect(status().isOk())
         .andExpect(jsonPath("$.participantId").value(original.getId()))
         .andExpect(jsonPath("$.nickname").value("기존학생"));
     assertThat(participants.findByRoomIdAndUserIdAndLeftAtIsNull(room.getId(), student.getId())).isPresent();
+    assertThat(participantCount(student)).isEqualTo(1);
+    perform(get(path()), student).andExpect(status().isOk())
+        .andExpect(jsonPath("$.joined").value(true))
+        .andExpect(jsonPath("$.myNickname").value("기존학생"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"교\\u200B수", "\\u1100\\u116D\\u1109\\u116E",
+      "\\u00A0\\u00A0", "\\u200B\\u200B", "\\u3164\\u3164",
+      "\\u115F\\u115F", "\\u1160\\u1160", "\\uFFA0\\uFFA0",
+      "\\u2007\\u2007", "\\u202F\\u202F", "가\\u0001나", "가\\u202E나"})
+  void invisibleOrDisguisedNicknamesAreRejected(String encodedNickname) throws Exception {
+    join(student, "{\"nickname\":\"" + encodedNickname + "\"}")
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("NICKNAME_NOT_ALLOWED"));
+    assertThat(participantCount(student)).isZero();
+  }
+
+  @Test void ordinarySpaceInsideNicknameIsPreserved() throws Exception {
+    join(student, "{\"nickname\":\"  조용한 한라봉  \"}")
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.nickname").value("조용한 한라봉"));
+    assertThat(participants.findByRoomIdAndUserId(room.getId(), student.getId())
+        .orElseThrow().getNickname()).isEqualTo("조용한 한라봉");
+  }
+
+  @Test void decomposedHangulIsNormalizedBeforeLengthValidationAndStorage() throws Exception {
+    String nickname = "가".repeat(10);
+    String decomposed = Normalizer.normalize(nickname, Normalizer.Form.NFD);
+    join(student, "{\"nickname\":\"  " + decomposed + "  \"}")
+        .andExpect(status().isCreated()).andExpect(jsonPath("$.nickname").value(nickname));
+    assertThat(participants.findByRoomIdAndUserId(room.getId(), student.getId())
+        .orElseThrow().getNickname()).isEqualTo(nickname);
   }
 
   @ParameterizedTest @ValueSource(ints = {2, 10})
