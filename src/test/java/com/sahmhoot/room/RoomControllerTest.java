@@ -23,6 +23,7 @@ import com.sahmhoot.room.exception.RoomExceptionHandler;
 import com.sahmhoot.room.service.RoomManagementService;
 import com.sahmhoot.room.service.RoomEntryService;
 import com.sahmhoot.room.service.RoomService;
+import com.sahmhoot.room.service.RoomStateService;
 import com.sahmhoot.user.Role;
 import java.time.Instant;
 import java.util.List;
@@ -43,10 +44,11 @@ class RoomControllerTest {
   private final RoomService service = mock(RoomService.class);
   private final RoomManagementService management = mock(RoomManagementService.class);
   private final RoomEntryService entry = mock(RoomEntryService.class);
+  private final RoomStateService states = mock(RoomStateService.class);
   private MockMvc mvc;
 
   @BeforeEach void setup() {
-    mvc = MockMvcBuilders.standaloneSetup(new RoomController(service, management, entry))
+    mvc = MockMvcBuilders.standaloneSetup(new RoomController(service, management, entry, states))
         .setControllerAdvice(new RoomExceptionHandler())
         .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver()).build();
     SecurityContextHolder.getContext().setAuthentication(
@@ -182,5 +184,19 @@ class RoomControllerTest {
         .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
         .andExpect(jsonPath("$.fieldErrors[0].field").value("roomId"));
     verifyNoInteractions(management);
+  }
+
+  @Test void stateDelegatesRoomIdAndAuthenticatedUser() throws Exception {
+    mvc.perform(get("/api/rooms/42/state")).andExpect(status().isOk());
+    verify(states).state(42L, 1L);
+    verifyNoInteractions(service, management, entry);
+  }
+
+  @Test void malformedStateRoomIdIsRejectedBeforeCallingService() throws Exception {
+    mvc.perform(get("/api/rooms/abc/state"))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+        .andExpect(jsonPath("$.fieldErrors[0].field").value("roomId"));
+    verifyNoInteractions(states);
   }
 }

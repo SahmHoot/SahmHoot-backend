@@ -7,9 +7,11 @@ import com.sahmhoot.room.dto.JoinRoomRequest;
 import com.sahmhoot.room.dto.JoinRoomResponse;
 import com.sahmhoot.room.dto.RoomByCodeResponse;
 import com.sahmhoot.room.dto.RoomSummaryResponse;
+import com.sahmhoot.room.dto.RoomStateResponse;
 import com.sahmhoot.room.service.RoomEntryService;
 import com.sahmhoot.room.service.RoomManagementService;
 import com.sahmhoot.room.service.RoomService;
+import com.sahmhoot.room.service.RoomStateService;
 import jakarta.validation.Valid;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +27,12 @@ public class RoomController {
   private final RoomService service;
   private final RoomManagementService management;
   private final RoomEntryService entry;
+  private final RoomStateService states;
+
+  @GetMapping("/{roomId}/state")
+  public RoomStateResponse state(@AuthenticationPrincipal AuthUser me, @PathVariable Long roomId) {
+    return states.state(roomId, me.userId());
+  }
 
   @GetMapping("/by-code/{joinCode}")
   public RoomByCodeResponse byCode(@AuthenticationPrincipal AuthUser me,
