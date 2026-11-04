@@ -590,7 +590,7 @@ class QuizCoreTxServiceTest {
   }
 
   @Test
-  @DisplayName("closeQuestion: 마감 예약이 늦게 실행돼도 닫힌 시각은 closesAt + 1초로 기록된다 (#23)")
+  @DisplayName("closeQuestion: 마감 예약이 늦게 실행돼도 닫힌 시각은 closesAt + 1초로 기록하고, 다음 문항은 실제 처리 3초 뒤에 연다 (#23)")
   void closeQuestion_lateExecution_recordsClosesAtPlusOneSecond() {
     Instant closesAt = Instant.parse("2026-11-04T10:00:20Z");
     // 가짜 시계: 마감 예정 시각보다 5초 늦게 실행된 상황
@@ -605,7 +605,8 @@ class QuizCoreTxServiceTest {
 
     assertThat(result.processed()).isTrue();
     assertThat(question.getClosedAt()).isEqualTo(Instant.parse("2026-11-04T10:00:21Z"));
-    assertThat(result.nextOpensAt()).isEqualTo(Instant.parse("2026-11-04T10:00:24Z"));
+    // 피드백 3초는 실제로 닫은 10:00:25부터 센다. 기록 시각(21초) 기준이면 이미 지난 24초가 된다.
+    assertThat(result.nextOpensAt()).isEqualTo(Instant.parse("2026-11-04T10:00:28Z"));
   }
 
   /** 지정한 시각에 멈춘 시계로 서비스를 하나 더 만든다. 목은 이 테스트 클래스의 것을 그대로 쓴다. */

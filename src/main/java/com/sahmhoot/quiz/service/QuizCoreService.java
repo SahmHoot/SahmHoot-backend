@@ -60,7 +60,7 @@ public class QuizCoreService {
 
   /**
    * 문항 마감 처리 (마감 예약 실행 또는 5번 AnswerService의 전원 응답 판정 시 호출).
-   * QUESTION_CLOSED는 트랜잭션 커밋 후 발행한다. 실제로 닫았을 때만 nextOpensAt(닫힌 시각 + 3초)에
+   * QUESTION_CLOSED는 트랜잭션 커밋 후 발행한다. 실제로 닫았을 때만 nextOpensAt(마감을 처리한 시각 + 3초)에
    * 다음 문항 열기 또는 결과 처리를 예약한다. 이미 닫혔으면 아무것도 예약하지 않으므로, 조기 마감 뒤에
    * 원래 마감 예약이 실행되어도 다음 진행이 두 번 걸리지 않는다.
    */

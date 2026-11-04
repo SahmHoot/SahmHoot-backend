@@ -165,7 +165,9 @@ public class QuizCoreTxService {
         ? allQuestions.get(currentIndex + 1).getOrderNo()
         : null;
 
-    Instant nextOpensAt = actualClosedAt.plusSeconds(3);
+    // 피드백 3초는 실제로 닫은 지금부터 센다. 기록용 actualClosedAt(최대 closesAt + 1초)에서 세면
+    // 마감 예약이 늦게 실행됐을 때 이미 지난 시각이 되어 다음 문항이 피드백 없이 바로 열린다(#23).
+    Instant nextOpensAt = now.plusSeconds(3);
     CloseQuestionResult result = CloseQuestionResult.closed(
         quizRun.getId(),
         question.getId(),
