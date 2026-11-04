@@ -113,7 +113,8 @@ class RoomEntryServiceTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"교\u200B수", "\u1100\u116D\u1109\u116E",
-      "\u00A0\u00A0", "\u200B\u200B", "\u3164\u3164", "가\u0001나"})
+      "\u00A0\u00A0", "\u200B\u200B", "\u3164\u3164", "가\u0001나",
+      "교\uFE00수", "\uFE0F\uFE0F", "\u2800\u2800", "😀😀", "❤️❤️"})
   void invalidNicknameDoesNotCreateParticipant(String nickname) {
     assertError(() -> service.join(2L, "123456", new JoinRoomRequest(nickname)),
         RoomErrorCode.NICKNAME_NOT_ALLOWED);

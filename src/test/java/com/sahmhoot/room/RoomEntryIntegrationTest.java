@@ -123,7 +123,9 @@ class RoomEntryIntegrationTest {
   @ValueSource(strings = {"교\\u200B수", "\\u1100\\u116D\\u1109\\u116E",
       "\\u00A0\\u00A0", "\\u200B\\u200B", "\\u3164\\u3164",
       "\\u115F\\u115F", "\\u1160\\u1160", "\\uFFA0\\uFFA0",
-      "\\u2007\\u2007", "\\u202F\\u202F", "가\\u0001나", "가\\u202E나"})
+      "\\u2007\\u2007", "\\u202F\\u202F", "가\\u0001나", "가\\u202E나",
+      "교\\uFE00수", "\\uFE0F\\uFE0F", "\\u2800\\u2800",
+      "😀😀", "❤️❤️", "ㅋㅋㅋ", "student_1", "student.1"})
   void invisibleOrDisguisedNicknamesAreRejected(String encodedNickname) throws Exception {
     join(student, "{\"nickname\":\"" + encodedNickname + "\"}")
         .andExpect(status().isBadRequest())
@@ -131,12 +133,14 @@ class RoomEntryIntegrationTest {
     assertThat(participantCount(student)).isZero();
   }
 
-  @Test void ordinarySpaceInsideNicknameIsPreserved() throws Exception {
-    join(student, "{\"nickname\":\"  조용한 한라봉  \"}")
+  @ParameterizedTest
+  @ValueSource(strings = {"조용한 한라봉", "한라봉", "student1", "Student 01"})
+  void allowedNicknamesAreStoredWithInternalSpacesPreserved(String nickname) throws Exception {
+    join(student, "{\"nickname\":\"  " + nickname + "  \"}")
         .andExpect(status().isCreated())
-        .andExpect(jsonPath("$.nickname").value("조용한 한라봉"));
+        .andExpect(jsonPath("$.nickname").value(nickname));
     assertThat(participants.findByRoomIdAndUserId(room.getId(), student.getId())
-        .orElseThrow().getNickname()).isEqualTo("조용한 한라봉");
+        .orElseThrow().getNickname()).isEqualTo(nickname);
   }
 
   @Test void decomposedHangulIsNormalizedBeforeLengthValidationAndStorage() throws Exception {

@@ -13,6 +13,7 @@ import com.sahmhoot.room.exception.RoomException;
 import com.sahmhoot.room.repository.RoomParticipantRepository;
 import com.sahmhoot.room.repository.RoomRepository;
 import java.time.Duration;
+import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -22,6 +23,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class RoomEntryService {
+  private static final Pattern ALLOWED_NICKNAME = Pattern.compile("[가-힣a-zA-Z0-9 ]+");
+
   private final RoomRepository rooms;
   private final RoomParticipantRepository participants;
   private final RoomUserLookup users;
@@ -68,11 +71,7 @@ public class RoomEntryService {
         return new EntryResult(JoinRoomResponse.from(existing.get()), false);
       }
       String nickname = request.nickname();
-      // 제어·서식·채움 문자는 금지어 사이에 끼운 경우도 포함해 거부한다.
-      if (nickname.contains("교수")
-          || nickname.codePoints().anyMatch(RoomEntryService::isDisallowedNicknameCharacter)
-          || nickname.codePoints().allMatch(codePoint ->
-              Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint))) {
+      if (nickname.contains("교수") || !ALLOWED_NICKNAME.matcher(nickname).matches()) {
         throw new RoomException(RoomErrorCode.NICKNAME_NOT_ALLOWED);
       }
       if (participants.existsByRoomIdAndNickname(roomId, nickname)) {
@@ -82,12 +81,6 @@ public class RoomEntryService {
           new RoomParticipant(room.getId(), userId, nickname));
       return new EntryResult(JoinRoomResponse.from(participant), true);
     }));
-  }
-
-  private static boolean isDisallowedNicknameCharacter(int codePoint) {
-    return Character.isISOControl(codePoint) || Character.getType(codePoint) == Character.FORMAT
-        // Hangul choseong/jungseong filler, Hangul filler, halfwidth Hangul filler.
-        || codePoint == 0x115F || codePoint == 0x1160 || codePoint == 0x3164 || codePoint == 0xFFA0;
   }
 
   private void checkAccess(Long userId) {
