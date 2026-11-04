@@ -64,7 +64,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
  *       그 시각으로 시계를 옮겨 실행한다. 그래서 20초짜리 문항도 기다리지 않는다.</li>
  * </ul>
  * 두 가짜는 {@code @Primary}로 등록되어, 이 테스트 안에서만 진짜 시계·예약 도구 대신 쓰인다.
- * DB가 시각을 초 단위로 저장하므로 시계는 항상 정수 초로 둔다.
+ * DB가 시각을 초 단위로 저장하므로 시계는 정수 초로 둔다. 초 미만 시각을 확인하는 테스트만 예외다.
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -231,6 +231,60 @@ class QuizAutoProgressIntegrationTest {
     assertThat(runStatus(started.runId())).isEqualTo("ABORTED");
     assertThat(jdbc.queryForObject("SELECT status FROM rooms WHERE id = ?", String.class, roomId))
         .isEqualTo("CLOSED");
+  }
+
+  @Test
+  @DisplayName("초 미만 시각에 시작해도 저장·예약·답 검증이 같은 마감 시각을 쓰고 피드백은 3초다")
+  void fractionalStartKeepsDeadlineAndFeedbackConsistent() {
+    // 10:00:00.200 + 10초 = 10:00:10.200 → 올림해서 11초가 마감, 12초가 허용 끝이다.
+    clock.setTo(T0.plusMillis(200));
+    StartQuizResponse started = startQuiz(10, 20);
+    Long participantId = joinAsStudent();
+    Long choiceId = runChoices.findByRunQuestionIdOrderByOrderNoAsc(started.firstRunQuestionId()).getFirst().getId();
+
+    assertThat(started.closesAt()).isEqualTo(T0.plusSeconds(11));
+    assertThat(runQuestions.findById(started.firstRunQuestionId()).orElseThrow().getClosesAt())
+        .isEqualTo(T0.plusSeconds(11));
+    assertThat(scheduler.pendingTimes()).containsExactly(T0.plusSeconds(12));
+
+    // 허용 끝 직전의 답은 받는다. 온라인 참여자를 한 명 더 두어 전원 응답 조기 마감은 일어나지 않게 한다.
+    clock.setTo(T0.plusMillis(11_900));
+    answerService.submitAnswer(roomId, participantId,
+        new SubmitAnswerRequest(started.firstRunQuestionId(), choiceId), Set.of(participantId, -1L));
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM answers WHERE run_question_id = ?",
+        Integer.class, started.firstRunQuestionId())).isOne();
+
+    scheduler.runNext();
+
+    assertThat(clock.instant()).isEqualTo(T0.plusSeconds(12));
+    assertThat(runQuestions.findById(started.firstRunQuestionId()).orElseThrow().getClosedAt())
+        .isEqualTo(T0.plusSeconds(12));
+    assertThat(scheduler.pendingTimes()).containsExactly(T0.plusSeconds(15));
+  }
+
+  @Test
+  @DisplayName("마감 예약이 늦게 실행돼도 다음 문항은 실제 처리 3초 뒤에 열리고, 닫힌 시각은 closesAt + 1초로 기록된다")
+  void delayedCloseKeepsThreeSecondFeedback() {
+    StartQuizResponse started = startQuiz(10, 20);
+
+    // 11초에 걸린 마감 예약이 16초에야 실행된 상황
+    clock.setTo(T0.plusSeconds(16));
+    scheduler.runNext();
+
+    assertThat(runQuestions.findById(started.firstRunQuestionId()).orElseThrow().getClosedAt())
+        .isEqualTo(T0.plusSeconds(11));
+    assertThat(scheduler.pendingTimes()).containsExactly(T0.plusSeconds(19));
+
+    ArgumentCaptor<Object> sent = ArgumentCaptor.forClass(Object.class);
+    verify(messaging, atLeastOnce()).convertAndSend(eq("/topic/rooms/" + roomId + "/quiz"), sent.capture());
+    assertThat(sent.getAllValues()).filteredOn(QuestionClosedMessage.class::isInstance).singleElement()
+        .isInstanceOfSatisfying(QuestionClosedMessage.class,
+            message -> assertThat(message.nextOpensAt()).isEqualTo(T0.plusSeconds(19)));
+
+    scheduler.runNext();
+
+    assertThat(runQuestions.findByQuizRunIdOrderByOrderNoAsc(started.runId()).get(1).getOpenedAt())
+        .isEqualTo(T0.plusSeconds(19));
   }
 
   /** 주어진 제한시간(초)의 객관식 문항들로 세트를 만들고 T0에 퀴즈를 시작한다. */
