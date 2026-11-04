@@ -26,7 +26,9 @@ import com.sahmhoot.quiz.service.port.RoomPort;
 import com.sahmhoot.quiz.service.port.RoomSnapshot;
 import com.sahmhoot.quiz.service.port.RoomStatus;
 import java.time.Duration;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -51,6 +53,8 @@ public class QuizCoreTxService {
   private final RoomPort roomPort;
   private final QuestionSetPort questionSetPort;
   private final ApplicationEventPublisher eventPublisher;
+  /** 현재 시각을 읽는 시계. 운영은 진짜 UTC 시계, 테스트는 가짜 시계가 들어온다({@code QuizClockConfig}). */
+  private final Clock clock;
 
   /**
    * 퀴즈 시작 트랜잭션.
@@ -88,7 +92,7 @@ public class QuizCoreTxService {
       throw new BusinessException(ErrorCode.QUIZ_NOT_RUNNING);
     }
 
-    Instant now = Instant.now();
+    Instant now = Instant.now(clock);
     quizRun.abort(now);
     quizRunRepository.save(quizRun);
 
@@ -123,7 +127,7 @@ public class QuizCoreTxService {
 
     // 방 상태를 OPEN(대기)으로 복귀
     roomPort.updateStatus(roomId, RoomStatus.OPEN);
-    eventPublisher.publishEvent(new QuizStateChangedEvent(roomId, RoomWaitingMessage.of(Instant.now())));
+    eventPublisher.publishEvent(new QuizStateChangedEvent(roomId, RoomWaitingMessage.of(Instant.now(clock))));
     log.info("Closed quiz result for roomId={}, runId={}, returned to OPEN", roomId, latestRun.getId());
   }
 
@@ -146,7 +150,7 @@ public class QuizCoreTxService {
       return CloseQuestionResult.ignored();
     }
 
-    Instant now = Instant.now();
+    Instant now = Instant.now(clock);
     Instant maxAllowed = question.getClosesAt() != null ? question.getClosesAt().plusSeconds(1) : now;
     Instant actualClosedAt = now.isBefore(maxAllowed) ? now : maxAllowed;
     question.close(actualClosedAt);
@@ -161,7 +165,9 @@ public class QuizCoreTxService {
         ? allQuestions.get(currentIndex + 1).getOrderNo()
         : null;
 
-    Instant nextOpensAt = actualClosedAt.plusSeconds(3);
+    // 피드백 3초는 실제로 닫은 지금부터 센다. 기록용 actualClosedAt(최대 closesAt + 1초)에서 세면
+    // 마감 예약이 늦게 실행됐을 때 이미 지난 시각이 되어 다음 문항이 피드백 없이 바로 열린다(#23).
+    Instant nextOpensAt = now.plusSeconds(3);
     CloseQuestionResult result = CloseQuestionResult.closed(
         quizRun.getId(),
         question.getId(),
@@ -195,7 +201,7 @@ public class QuizCoreTxService {
       return null;
     }
 
-    Instant now = Instant.now();
+    Instant now = Instant.now(clock);
     quizRun.finish(now);
     quizRunRepository.save(quizRun);
 
@@ -208,36 +214,38 @@ public class QuizCoreTxService {
 
   /**
    * 다음 문항 열기 트랜잭션.
+   * 실제로 열었으면 마감 예약에 쓸 문항 ID와 closesAt을, 아무것도 하지 않았으면 ignored()를 돌려준다.
    */
   @Transactional
-  public void openQuestion(Long roomId, Long runId, int orderNo) {
+  public OpenQuestionResult openQuestion(Long roomId, Long runId, int orderNo) {
     QuizRun quizRun = quizRunRepository.findByIdAndRoomId(runId, roomId)
         .orElseThrow(() -> new BusinessException(ErrorCode.QUIZ_RUN_NOT_FOUND));
 
     if (!quizRun.isRunning()) {
-      return;
+      return OpenQuestionResult.ignored();
     }
 
     RunQuestion question = runQuestionRepository.findByQuizRunIdAndOrderNo(runId, orderNo)
         .orElseThrow(() -> new BusinessException(ErrorCode.QUESTION_NOT_FOUND));
 
     if (!question.isReady()) {
-      return;
+      return OpenQuestionResult.ignored();
     }
 
     List<RunQuestion> questions = runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(runId);
     int questionIndex = findQuestionIndex(questions, question.getId());
     if (questions.stream().anyMatch(RunQuestion::isOpen)
         || questions.subList(0, questionIndex).stream().anyMatch(previous -> !previous.isClosed())) {
-      return;
+      return OpenQuestionResult.ignored();
     }
 
-    Instant now = Instant.now();
-    Instant closesAt = now.plus(Duration.ofSeconds(question.getTimeLimitSeconds()));
+    Instant now = Instant.now(clock);
+    Instant closesAt = closesAtFrom(now, question.getTimeLimitSeconds());
     question.open(now, closesAt);
     runQuestionRepository.save(question);
     publishQuestionOpened(quizRun, question, questionIndex + 1, questions.size());
     log.info("Opened runQuestionId={} (orderNo={}) until {}", question.getId(), orderNo, closesAt);
+    return OpenQuestionResult.opened(question.getId(), closesAt);
   }
 
   private RoomSnapshot getRoomOwnedBy(Long roomId, Long hostUserId) {
@@ -264,7 +272,7 @@ public class QuizCoreTxService {
         .roomId(roomId)
         .questionSetId(questionSetId)
         .status(QuizRunStatus.RUNNING)
-        .startedAt(Instant.now())
+        .startedAt(Instant.now(clock))
         .build();
     return quizRunRepository.saveAndFlush(quizRun);
   }
@@ -277,12 +285,23 @@ public class QuizCoreTxService {
     }
 
     RunQuestion firstQuestion = questions.getFirst();
-    Instant openedAt = Instant.now();
-    Instant closesAt = openedAt.plus(Duration.ofSeconds(firstQuestion.getTimeLimitSeconds()));
+    Instant openedAt = Instant.now(clock);
+    Instant closesAt = closesAtFrom(openedAt, firstQuestion.getTimeLimitSeconds());
     firstQuestion.open(openedAt, closesAt);
     runQuestionRepository.save(firstQuestion);
     publishQuestionOpened(quizRun, firstQuestion, 1, questions.size());
     return new StartQuizResponse(quizRun.getId(), questions.size(), firstQuestion.getId(), closesAt);
+  }
+
+  /**
+   * 문항 마감 시각. 여는 시각 + 제한시간을 초 단위로 올림한다(#23).
+   * closes_at 컬럼(datetime)은 초 미만을 반올림해 저장하므로, 소수점이 남으면 학생에게 보낸 마감 시각·
+   * 마감 예약 시각과 DB로 하는 답 검증 시각이 최대 0.5초 어긋난다. 올림이라 제한시간이 줄지는 않는다.
+   */
+  private Instant closesAtFrom(Instant openedAt, int timeLimitSeconds) {
+    Instant closesAt = openedAt.plus(Duration.ofSeconds(timeLimitSeconds));
+    Instant wholeSeconds = closesAt.truncatedTo(ChronoUnit.SECONDS);
+    return wholeSeconds.equals(closesAt) ? closesAt : wholeSeconds.plusSeconds(1);
   }
 
   private int findQuestionIndex(List<RunQuestion> questions, Long questionId) {
@@ -301,7 +320,7 @@ public class QuizCoreTxService {
         .toList();
     QuestionOpenedMessage message = QuestionOpenedMessage.of(
         quizRun.getId(), question.getId(), questionNo, totalQuestions, question.getType(), question.getContent(),
-        question.getTimeLimitSeconds(), question.getClosesAt(), choices, Instant.now());
+        question.getTimeLimitSeconds(), question.getClosesAt(), choices, Instant.now(clock));
     eventPublisher.publishEvent(new QuizStateChangedEvent(quizRun.getRoomId(), message));
   }
 

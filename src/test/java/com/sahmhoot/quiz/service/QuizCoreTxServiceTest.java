@@ -34,7 +34,10 @@ import com.sahmhoot.quiz.service.port.QuestionSetSnapshot;
 import com.sahmhoot.quiz.service.port.RoomPort;
 import com.sahmhoot.quiz.service.port.RoomSnapshot;
 import com.sahmhoot.quiz.service.port.RoomStatus;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -70,6 +73,12 @@ class QuizCoreTxServiceTest {
   @Mock
   private ApplicationEventPublisher eventPublisher;
 
+  /**
+   * 테스트 시작 시각에 멈춘 시계. 서비스가 읽는 "지금"이 실행 중에 바뀌지 않는다.
+   * 마감 시각은 초 단위로 올림되므로, 기대값을 "지금 + 제한시간"으로 바로 쓸 수 있게 정수 초로 둔다.
+   */
+  private final Clock clock = Clock.fixed(Instant.now().truncatedTo(ChronoUnit.SECONDS), ZoneOffset.UTC);
+
   private QuizCoreTxService quizCoreTxService;
 
   @BeforeEach
@@ -81,7 +90,8 @@ class QuizCoreTxServiceTest {
         quizResultService,
         roomPort,
         questionSetPort,
-        eventPublisher
+        eventPublisher,
+        clock
     );
   }
 
@@ -480,13 +490,41 @@ class QuizCoreTxServiceTest {
     given(runQuestionRepository.findByQuizRunIdAndOrderNo(77L, 7)).willReturn(Optional.of(next));
     given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(first, next));
 
-    quizCoreTxService.openQuestion(42L, 77L, 7);
-    quizCoreTxService.openQuestion(42L, 77L, 7);
+    OpenQuestionResult firstCall = quizCoreTxService.openQuestion(42L, 77L, 7);
+    OpenQuestionResult secondCall = quizCoreTxService.openQuestion(42L, 77L, 7);
+
+    // 처음 호출만 "열었음"과 마감 예약에 쓸 값을 돌려주고, 중복 호출은 ignored라 예약도 걸리지 않는다.
+    assertThat(firstCall.opened()).isTrue();
+    assertThat(firstCall.runQuestionId()).isEqualTo(811L);
+    assertThat(firstCall.closesAt()).isEqualTo(Instant.now(clock).plusSeconds(15));
+    assertThat(secondCall.opened()).isFalse();
 
     assertThat(publishedMessage()).isInstanceOfSatisfying(QuestionOpenedMessage.class, message -> {
       assertThat(message.questionNo()).isEqualTo(2);
       assertThat(message.totalQuestions()).isEqualTo(2);
     });
+  }
+
+  @Test
+  @DisplayName("openQuestion: 초 미만 시각에 열면 마감 시각을 초 단위로 올림해 저장·발행·반환한다 (#23)")
+  void openQuestion_fractionalNow_roundsClosesAtUpToWholeSecond() {
+    QuizCoreTxService fractionalService = serviceAt(Instant.parse("2026-11-04T10:00:00.200Z"));
+    QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    RunQuestion first = RunQuestion.builder().id(810L).orderNo(1).status(RunQuestionStatus.CLOSED).build();
+    RunQuestion next = RunQuestion.builder().id(811L).quizRun(run).orderNo(2)
+        .status(RunQuestionStatus.READY).timeLimitSeconds(10).build();
+    given(quizRunRepository.findByIdAndRoomId(77L, 42L)).willReturn(Optional.of(run));
+    given(runQuestionRepository.findByQuizRunIdAndOrderNo(77L, 2)).willReturn(Optional.of(next));
+    given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(first, next));
+
+    OpenQuestionResult result = fractionalService.openQuestion(42L, 77L, 2);
+
+    // 10:00:00.200 + 10초 = 10:00:10.200 → 10:00:11. DB(datetime)에 그대로 저장돼 예약·답 검증과 같은 값이 된다.
+    Instant expected = Instant.parse("2026-11-04T10:00:11Z");
+    assertThat(result.closesAt()).isEqualTo(expected);
+    assertThat(next.getClosesAt()).isEqualTo(expected);
+    assertThat(publishedMessage()).isInstanceOfSatisfying(QuestionOpenedMessage.class,
+        message -> assertThat(message.closesAt()).isEqualTo(expected));
   }
 
   @Test
@@ -503,7 +541,7 @@ class QuizCoreTxServiceTest {
     given(runQuestionRepository.findByQuizRunIdAndOrderNo(77L, 3)).willReturn(Optional.of(third));
     given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(first, second, third));
 
-    quizCoreTxService.openQuestion(42L, 77L, 2);
+    assertThat(quizCoreTxService.openQuestion(42L, 77L, 2).opened()).isFalse();
     assertThat(second.isReady()).isTrue();
     verifyNoInteractions(eventPublisher);
 
@@ -531,6 +569,58 @@ class QuizCoreTxServiceTest {
       assertThat(run.isRunning()).isTrue();
     }
     verifyNoInteractions(eventPublisher, quizResultService);
+  }
+
+  @Test
+  @DisplayName("closeQuestion: 이미 닫힌 문항에 늦은 마감 예약이 실행되면 아무것도 바꾸지 않고 발행하지 않는다 (#23)")
+  void closeQuestion_alreadyClosed_lateScheduledCallDoesNothing() {
+    Instant closedAt = Instant.parse("2026-11-04T10:00:05Z");
+    QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    // 전원 응답으로 마감 예정 시각(10:00:20)보다 먼저 닫힌 문항
+    RunQuestion question = RunQuestion.builder().id(811L).quizRun(run).orderNo(1)
+        .status(RunQuestionStatus.CLOSED).closesAt(Instant.parse("2026-11-04T10:00:20Z")).closedAt(closedAt).build();
+    given(runQuestionRepository.findById(811L)).willReturn(Optional.of(question));
+
+    CloseQuestionResult result = quizCoreTxService.closeQuestion(42L, 811L);
+
+    assertThat(result.processed()).isFalse();
+    assertThat(question.getClosedAt()).isEqualTo(closedAt);
+    verify(runQuestionRepository, never()).save(any());
+    verifyNoInteractions(eventPublisher);
+  }
+
+  @Test
+  @DisplayName("closeQuestion: 마감 예약이 늦게 실행돼도 닫힌 시각은 closesAt + 1초로 기록하고, 다음 문항은 실제 처리 3초 뒤에 연다 (#23)")
+  void closeQuestion_lateExecution_recordsClosesAtPlusOneSecond() {
+    Instant closesAt = Instant.parse("2026-11-04T10:00:20Z");
+    // 가짜 시계: 마감 예정 시각보다 5초 늦게 실행된 상황
+    QuizCoreTxService lateService = serviceAt(Instant.parse("2026-11-04T10:00:25Z"));
+    QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    RunQuestion question = RunQuestion.builder().id(811L).quizRun(run).orderNo(1)
+        .status(RunQuestionStatus.OPEN).closesAt(closesAt).build();
+    given(runQuestionRepository.findById(811L)).willReturn(Optional.of(question));
+    given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(question));
+
+    CloseQuestionResult result = lateService.closeQuestion(42L, 811L);
+
+    assertThat(result.processed()).isTrue();
+    assertThat(question.getClosedAt()).isEqualTo(Instant.parse("2026-11-04T10:00:21Z"));
+    // 피드백 3초는 실제로 닫은 10:00:25부터 센다. 기록 시각(21초) 기준이면 이미 지난 24초가 된다.
+    assertThat(result.nextOpensAt()).isEqualTo(Instant.parse("2026-11-04T10:00:28Z"));
+  }
+
+  /** 지정한 시각에 멈춘 시계로 서비스를 하나 더 만든다. 목은 이 테스트 클래스의 것을 그대로 쓴다. */
+  private QuizCoreTxService serviceAt(Instant now) {
+    return new QuizCoreTxService(
+        quizRunRepository,
+        runQuestionRepository,
+        runChoiceRepository,
+        quizResultService,
+        roomPort,
+        questionSetPort,
+        eventPublisher,
+        Clock.fixed(now, ZoneOffset.UTC)
+    );
   }
 
   private QuizMessage publishedMessage() {
