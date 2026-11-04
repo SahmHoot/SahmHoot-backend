@@ -11,7 +11,7 @@ public record QuizFinishedMessage(
     Instant sentAt,
     Long runId,
     QuizResultResponse result
-) {
+) implements QuizMessage {
 
   public static QuizFinishedMessage of(Long runId, QuizResultResponse result, Instant sentAt) {
     return new QuizFinishedMessage("QUIZ_FINISHED", sentAt, runId, result);

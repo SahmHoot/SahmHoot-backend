@@ -51,7 +51,9 @@ public class QuizAnswerMessageController {
     } catch (NumberFormatException e) {
       throw new BusinessException(ErrorCode.UNAUTHORIZED, "유효하지 않은 인증 정보입니다.");
     }
-    RoomSnapshot room = roomPort.getRoom(roomId);
+    // 방 모듈은 "없음"만 알려 주고, 어떤 오류로 응답할지는 퀴즈가 정한다.
+    RoomSnapshot room = roomPort.findRoom(roomId)
+        .orElseThrow(() -> new BusinessException(ErrorCode.ROOM_NOT_FOUND));
 
     // 06 실시간 규격 166행: 소유자의 answer 전송은 FORBIDDEN
     if (room.hostId().equals(userId)) {
@@ -59,7 +61,8 @@ public class QuizAnswerMessageController {
     }
 
     // userId -> participantId 조회 (없으면 NOT_PARTICIPANT)
-    Long participantId = roomPort.findParticipantId(roomId, userId);
+    Long participantId = roomPort.findParticipantId(roomId, userId)
+        .orElseThrow(() -> new BusinessException(ErrorCode.NOT_PARTICIPANT));
     // TODO: Room 담당의 접속 상태 기능과 연동해 실제 접속 중인 비소유 participantId 집합을 전달한다.
     // 연동 전에는 조기 마감을 비활성화한다.
     AnswerProgressResponse progress = answerService.submitAnswer(roomId, participantId, request, Set.of());

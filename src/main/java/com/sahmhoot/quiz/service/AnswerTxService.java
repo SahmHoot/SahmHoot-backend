@@ -9,6 +9,7 @@ import com.sahmhoot.quiz.entity.RunQuestion;
 import com.sahmhoot.quiz.repository.AnswerRepository;
 import com.sahmhoot.quiz.repository.RunChoiceRepository;
 import com.sahmhoot.quiz.repository.RunQuestionRepository;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.Set;
@@ -30,6 +31,8 @@ public class AnswerTxService {
   private final AnswerRepository answerRepository;
   private final RunQuestionRepository runQuestionRepository;
   private final RunChoiceRepository runChoiceRepository;
+  /** 현재 시각을 읽는 시계. 운영은 진짜 UTC 시계, 테스트는 가짜 시계가 들어온다({@code QuizClockConfig}). */
+  private final Clock clock;
 
   /**
    * 답변 제출/수정 트랜잭션.
@@ -44,7 +47,7 @@ public class AnswerTxService {
     RunQuestion question = runQuestionRepository.findById(request.runQuestionId())
         .orElseThrow(() -> new BusinessException(ErrorCode.QUESTION_NOT_FOUND));
 
-    Instant now = Instant.now();
+    Instant now = Instant.now(clock);
     validateAnswerWindow(question, roomId, now);
 
     RunChoice choice = runChoiceRepository.findByIdAndRunQuestionId(request.choiceId(), question.getId())

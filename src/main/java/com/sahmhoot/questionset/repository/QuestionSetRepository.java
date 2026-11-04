@@ -7,6 +7,8 @@ import org.springframework.data.jpa.repository.*;
 import org.springframework.data.repository.query.Param;
 
 public interface QuestionSetRepository extends JpaRepository<QuestionSet, Long> {
+  boolean existsByHostIdAndTitle(Long hostId, String title);
+
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select s from QuestionSet s where s.id = :id")
   Optional<QuestionSet> findLockedById(@Param("id") Long id);

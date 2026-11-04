@@ -6,12 +6,20 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.sahmhoot.quiz.exception.BusinessException;
 import com.sahmhoot.quiz.exception.ErrorCode;
 import com.sahmhoot.quiz.dto.QuizResultResponse;
 import com.sahmhoot.quiz.dto.StartQuizRequest;
 import com.sahmhoot.quiz.dto.StartQuizResponse;
+import com.sahmhoot.quiz.dto.message.QuestionOpenedMessage;
+import com.sahmhoot.quiz.dto.message.QuestionClosedMessage;
+import com.sahmhoot.quiz.dto.message.QuizMessage;
+import com.sahmhoot.quiz.dto.message.QuizCanceledMessage;
+import com.sahmhoot.quiz.dto.message.QuizFinishedMessage;
+import com.sahmhoot.quiz.dto.message.RoomWaitingMessage;
+import com.sahmhoot.quiz.event.QuizStateChangedEvent;
 import com.sahmhoot.quiz.entity.QuestionType;
 import com.sahmhoot.quiz.entity.QuizRun;
 import com.sahmhoot.quiz.entity.QuizRunStatus;
@@ -26,7 +34,10 @@ import com.sahmhoot.quiz.service.port.QuestionSetSnapshot;
 import com.sahmhoot.quiz.service.port.RoomPort;
 import com.sahmhoot.quiz.service.port.RoomSnapshot;
 import com.sahmhoot.quiz.service.port.RoomStatus;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,7 +45,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 @ExtendWith(MockitoExtension.class)
 class QuizCoreTxServiceTest {
@@ -57,6 +70,15 @@ class QuizCoreTxServiceTest {
   @Mock
   private QuestionSetPort questionSetPort;
 
+  @Mock
+  private ApplicationEventPublisher eventPublisher;
+
+  /**
+   * 테스트 시작 시각에 멈춘 시계. 서비스가 읽는 "지금"이 실행 중에 바뀌지 않는다.
+   * 마감 시각은 초 단위로 올림되므로, 기대값을 "지금 + 제한시간"으로 바로 쓸 수 있게 정수 초로 둔다.
+   */
+  private final Clock clock = Clock.fixed(Instant.now().truncatedTo(ChronoUnit.SECONDS), ZoneOffset.UTC);
+
   private QuizCoreTxService quizCoreTxService;
 
   @BeforeEach
@@ -67,7 +89,9 @@ class QuizCoreTxServiceTest {
         runChoiceRepository,
         quizResultService,
         roomPort,
-        questionSetPort
+        questionSetPort,
+        eventPublisher,
+        clock
     );
   }
 
@@ -79,12 +103,13 @@ class QuizCoreTxServiceTest {
     Long otherUserId = 99L;
     StartQuizRequest request = new StartQuizRequest(7L);
 
-    given(roomPort.getRoom(roomId)).willReturn(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN));
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN)));
 
     assertThatThrownBy(() -> quizCoreTxService.startQuiz(roomId, request, otherUserId))
         .isInstanceOf(BusinessException.class)
         .extracting(e -> ((BusinessException) e).getErrorCode())
         .isEqualTo(ErrorCode.FORBIDDEN);
+    verifyNoInteractions(eventPublisher);
   }
 
   @Test
@@ -93,12 +118,32 @@ class QuizCoreTxServiceTest {
     Long roomId = 42L;
     StartQuizRequest request = new StartQuizRequest(7L);
 
-    given(roomPort.getRoom(roomId)).willThrow(new BusinessException(ErrorCode.ROOM_NOT_FOUND));
+    // 방 모듈은 방이 없으면 빈 값만 돌려주고, ROOM_NOT_FOUND 오류는 퀴즈가 직접 던진다.
+    given(roomPort.findRoom(roomId)).willReturn(Optional.empty());
 
     assertThatThrownBy(() -> quizCoreTxService.startQuiz(roomId, request, 1L))
         .isInstanceOf(BusinessException.class)
         .extracting(e -> ((BusinessException) e).getErrorCode())
         .isEqualTo(ErrorCode.ROOM_NOT_FOUND);
+  }
+
+  @Test
+  @DisplayName("startQuiz: 문제 세트가 존재하지 않으면 QUESTION_SET_NOT_FOUND 예외를 던지고 회차를 만들지 않는다")
+  void startQuiz_questionSetNotFound_throwsQuestionSetNotFound() {
+    Long roomId = 42L;
+    Long hostUserId = 1L;
+    StartQuizRequest request = new StartQuizRequest(7L);
+
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN)));
+    given(quizRunRepository.existsByRoomIdAndStatus(roomId, QuizRunStatus.RUNNING)).willReturn(false);
+    // 세트 모듈은 세트가 없으면 빈 값만 돌려주고, QUESTION_SET_NOT_FOUND 오류는 퀴즈가 직접 던진다.
+    given(questionSetPort.findQuestionSet(7L)).willReturn(Optional.empty());
+
+    assertThatThrownBy(() -> quizCoreTxService.startQuiz(roomId, request, hostUserId))
+        .isInstanceOf(BusinessException.class)
+        .extracting(e -> ((BusinessException) e).getErrorCode())
+        .isEqualTo(ErrorCode.QUESTION_SET_NOT_FOUND);
+    verify(quizRunRepository, never()).saveAndFlush(any(QuizRun.class));
   }
 
   @Test
@@ -108,7 +153,7 @@ class QuizCoreTxServiceTest {
     Long hostUserId = 1L;
     StartQuizRequest request = new StartQuizRequest(7L);
 
-    given(roomPort.getRoom(roomId)).willReturn(new RoomSnapshot(roomId, hostUserId, RoomStatus.PLAYING));
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.PLAYING)));
 
     assertThatThrownBy(() -> quizCoreTxService.startQuiz(roomId, request, hostUserId))
         .isInstanceOf(BusinessException.class)
@@ -125,9 +170,9 @@ class QuizCoreTxServiceTest {
     Long questionSetId = 7L;
     StartQuizRequest request = new StartQuizRequest(questionSetId);
 
-    given(roomPort.getRoom(roomId)).willReturn(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN));
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN)));
     given(quizRunRepository.existsByRoomIdAndStatus(roomId, QuizRunStatus.RUNNING)).willReturn(false);
-    given(questionSetPort.getQuestionSet(questionSetId)).willReturn(new QuestionSetSnapshot(questionSetId, otherHostId));
+    given(questionSetPort.findQuestionSet(questionSetId)).willReturn(Optional.of(new QuestionSetSnapshot(questionSetId, otherHostId, "다른 소유자의 세트")));
 
     assertThatThrownBy(() -> quizCoreTxService.startQuiz(roomId, request, hostUserId))
         .isInstanceOf(BusinessException.class)
@@ -143,9 +188,9 @@ class QuizCoreTxServiceTest {
     Long questionSetId = 7L;
     StartQuizRequest request = new StartQuizRequest(questionSetId);
 
-    given(roomPort.getRoom(roomId)).willReturn(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN));
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN)));
     given(quizRunRepository.existsByRoomIdAndStatus(roomId, QuizRunStatus.RUNNING)).willReturn(false);
-    given(questionSetPort.getQuestionSet(questionSetId)).willReturn(new QuestionSetSnapshot(questionSetId, hostUserId));
+    given(questionSetPort.findQuestionSet(questionSetId)).willReturn(Optional.of(new QuestionSetSnapshot(questionSetId, hostUserId, "자료구조")));
 
     QuizRun savedRun = QuizRun.builder()
         .id(77L)
@@ -178,6 +223,12 @@ class QuizCoreTxServiceTest {
     verify(roomPort).updateStatus(roomId, RoomStatus.PLAYING);
     verify(questionSetPort).copyQuestionsToQuizRun(questionSetId, 77L);
     verify(runQuestionRepository).save(q1);
+    assertThat(publishedMessage()).isInstanceOfSatisfying(QuestionOpenedMessage.class, message -> {
+      assertThat(message.runQuestionId()).isEqualTo(q1.getId());
+      assertThat(message.questionNo()).isEqualTo(1);
+      assertThat(message.totalQuestions()).isEqualTo(1);
+      assertThat(message.closesAt()).isEqualTo(response.closesAt());
+    });
   }
 
   @Test
@@ -188,9 +239,9 @@ class QuizCoreTxServiceTest {
     Long questionSetId = 7L;
     StartQuizRequest request = new StartQuizRequest(questionSetId);
 
-    given(roomPort.getRoom(roomId)).willReturn(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN));
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN)));
     given(quizRunRepository.existsByRoomIdAndStatus(roomId, QuizRunStatus.RUNNING)).willReturn(false);
-    given(questionSetPort.getQuestionSet(questionSetId)).willReturn(new QuestionSetSnapshot(questionSetId, hostUserId));
+    given(questionSetPort.findQuestionSet(questionSetId)).willReturn(Optional.of(new QuestionSetSnapshot(questionSetId, hostUserId, "빈 세트")));
 
     QuizRun savedRun = QuizRun.builder()
         .id(77L)
@@ -227,7 +278,7 @@ class QuizCoreTxServiceTest {
         .status(RunQuestionStatus.OPEN)
         .build();
 
-    given(roomPort.getRoom(roomId)).willReturn(new RoomSnapshot(roomId, hostUserId, RoomStatus.PLAYING));
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.PLAYING)));
     given(quizRunRepository.findByIdAndRoomId(runId, roomId)).willReturn(Optional.of(quizRun));
     given(runQuestionRepository.findFirstByQuizRunIdAndStatus(runId, RunQuestionStatus.OPEN))
         .willReturn(Optional.of(openQuestion));
@@ -239,6 +290,8 @@ class QuizCoreTxServiceTest {
 
     // rooms.status OPEN 복귀 검증
     verify(roomPort).updateStatus(roomId, RoomStatus.OPEN);
+    assertThat(publishedMessage()).isInstanceOfSatisfying(QuizCanceledMessage.class,
+        message -> assertThat(message.runId()).isEqualTo(runId));
   }
 
   @Test
@@ -254,12 +307,13 @@ class QuizCoreTxServiceTest {
         .status(QuizRunStatus.FINISHED)
         .build();
 
-    given(roomPort.getRoom(roomId)).willReturn(new RoomSnapshot(roomId, hostUserId, RoomStatus.PLAYING));
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.PLAYING)));
     given(quizRunRepository.findTopByRoomIdOrderByIdDesc(roomId)).willReturn(Optional.of(finishedRun));
 
     quizCoreTxService.closeResult(roomId, hostUserId);
 
     verify(roomPort).updateStatus(roomId, RoomStatus.OPEN);
+    assertThat(publishedMessage()).isInstanceOf(RoomWaitingMessage.class);
   }
 
   @Test
@@ -276,7 +330,7 @@ class QuizCoreTxServiceTest {
         .build();
 
     // 방이 이미 OPEN 상태
-    given(roomPort.getRoom(roomId)).willReturn(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN));
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN)));
     given(quizRunRepository.findTopByRoomIdOrderByIdDesc(roomId)).willReturn(Optional.of(finishedRun));
 
     assertThatThrownBy(() -> quizCoreTxService.closeResult(roomId, hostUserId))
@@ -340,6 +394,12 @@ class QuizCoreTxServiceTest {
 
     // 결과 집계는 3초 뒤 finishQuiz에서 수행되므로 closeQuestion 중에는 호출되지 않아야 함
     verify(quizResultService, never()).aggregateResult(any());
+    assertThat(quizCoreTxService.closeQuestion(roomId, questionId).processed()).isFalse();
+    assertThat(publishedMessage()).isInstanceOfSatisfying(QuestionClosedMessage.class, message -> {
+      assertThat(message.correctChoiceId()).isEqualTo(result.correctChoiceId());
+      assertThat(message.isLast()).isTrue();
+      assertThat(message.nextOpensAt()).isEqualTo(result.nextOpensAt());
+    });
   }
 
   @Test
@@ -405,6 +465,8 @@ class QuizCoreTxServiceTest {
     QuizResultResponse expectedResult = new QuizResultResponse(List.of());
 
     given(quizRunRepository.findByIdAndRoomId(runId, roomId)).willReturn(Optional.of(runningRun));
+    given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(runId)).willReturn(List.of(
+        RunQuestion.builder().id(810L).status(RunQuestionStatus.CLOSED).build()));
     given(quizResultService.aggregateResult(runId)).willReturn(expectedResult);
 
     QuizResultResponse result = quizCoreTxService.finishQuiz(roomId, runId);
@@ -412,5 +474,159 @@ class QuizCoreTxServiceTest {
     assertThat(runningRun.getStatus()).isEqualTo(QuizRunStatus.FINISHED);
     assertThat(result).isEqualTo(expectedResult);
     verify(quizResultService).aggregateResult(runId);
+    assertThat(quizCoreTxService.finishQuiz(roomId, runId)).isNull();
+    assertThat(publishedMessage()).isInstanceOfSatisfying(QuizFinishedMessage.class,
+        message -> assertThat(message.result()).isEqualTo(expectedResult));
+  }
+
+  @Test
+  @DisplayName("openQuestion은 비연속 orderNo를 순번으로 변환하고 중복 호출 때 발행하지 않는다")
+  void openQuestion_publishesOnceWithSequentialQuestionNo() {
+    QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    RunQuestion first = RunQuestion.builder().id(810L).orderNo(3).status(RunQuestionStatus.CLOSED).build();
+    RunQuestion next = RunQuestion.builder().id(811L).quizRun(run).orderNo(7)
+        .status(RunQuestionStatus.READY).timeLimitSeconds(15).build();
+    given(quizRunRepository.findByIdAndRoomId(77L, 42L)).willReturn(Optional.of(run));
+    given(runQuestionRepository.findByQuizRunIdAndOrderNo(77L, 7)).willReturn(Optional.of(next));
+    given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(first, next));
+
+    OpenQuestionResult firstCall = quizCoreTxService.openQuestion(42L, 77L, 7);
+    OpenQuestionResult secondCall = quizCoreTxService.openQuestion(42L, 77L, 7);
+
+    // 처음 호출만 "열었음"과 마감 예약에 쓸 값을 돌려주고, 중복 호출은 ignored라 예약도 걸리지 않는다.
+    assertThat(firstCall.opened()).isTrue();
+    assertThat(firstCall.runQuestionId()).isEqualTo(811L);
+    assertThat(firstCall.closesAt()).isEqualTo(Instant.now(clock).plusSeconds(15));
+    assertThat(secondCall.opened()).isFalse();
+
+    assertThat(publishedMessage()).isInstanceOfSatisfying(QuestionOpenedMessage.class, message -> {
+      assertThat(message.questionNo()).isEqualTo(2);
+      assertThat(message.totalQuestions()).isEqualTo(2);
+    });
+  }
+
+  @Test
+  @DisplayName("openQuestion: 초 미만 시각에 열면 마감 시각을 초 단위로 올림해 저장·발행·반환한다 (#23)")
+  void openQuestion_fractionalNow_roundsClosesAtUpToWholeSecond() {
+    QuizCoreTxService fractionalService = serviceAt(Instant.parse("2026-11-04T10:00:00.200Z"));
+    QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    RunQuestion first = RunQuestion.builder().id(810L).orderNo(1).status(RunQuestionStatus.CLOSED).build();
+    RunQuestion next = RunQuestion.builder().id(811L).quizRun(run).orderNo(2)
+        .status(RunQuestionStatus.READY).timeLimitSeconds(10).build();
+    given(quizRunRepository.findByIdAndRoomId(77L, 42L)).willReturn(Optional.of(run));
+    given(runQuestionRepository.findByQuizRunIdAndOrderNo(77L, 2)).willReturn(Optional.of(next));
+    given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(first, next));
+
+    OpenQuestionResult result = fractionalService.openQuestion(42L, 77L, 2);
+
+    // 10:00:00.200 + 10초 = 10:00:10.200 → 10:00:11. DB(datetime)에 그대로 저장돼 예약·답 검증과 같은 값이 된다.
+    Instant expected = Instant.parse("2026-11-04T10:00:11Z");
+    assertThat(result.closesAt()).isEqualTo(expected);
+    assertThat(next.getClosesAt()).isEqualTo(expected);
+    assertThat(publishedMessage()).isInstanceOfSatisfying(QuestionOpenedMessage.class,
+        message -> assertThat(message.closesAt()).isEqualTo(expected));
+  }
+
+  @Test
+  @DisplayName("이전 문항이 열려 있거나 앞 문항을 건너뛴 호출은 다음 문항을 열거나 발행하지 않는다")
+  void openQuestion_cannotOverlapOrSkipQuestions() {
+    QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    RunQuestion first = RunQuestion.builder().id(810L).orderNo(1).status(RunQuestionStatus.OPEN).build();
+    RunQuestion second = RunQuestion.builder().id(811L).quizRun(run).orderNo(2)
+        .status(RunQuestionStatus.READY).timeLimitSeconds(15).build();
+    RunQuestion third = RunQuestion.builder().id(812L).quizRun(run).orderNo(3)
+        .status(RunQuestionStatus.READY).timeLimitSeconds(15).build();
+    given(quizRunRepository.findByIdAndRoomId(77L, 42L)).willReturn(Optional.of(run));
+    given(runQuestionRepository.findByQuizRunIdAndOrderNo(77L, 2)).willReturn(Optional.of(second));
+    given(runQuestionRepository.findByQuizRunIdAndOrderNo(77L, 3)).willReturn(Optional.of(third));
+    given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(first, second, third));
+
+    assertThat(quizCoreTxService.openQuestion(42L, 77L, 2).opened()).isFalse();
+    assertThat(second.isReady()).isTrue();
+    verifyNoInteractions(eventPublisher);
+
+    first.close(Instant.now());
+    quizCoreTxService.openQuestion(42L, 77L, 3);
+    assertThat(third.isReady()).isTrue();
+    verifyNoInteractions(eventPublisher);
+
+    quizCoreTxService.openQuestion(42L, 77L, 2);
+    assertThat(second.isOpen()).isTrue();
+    assertThat(publishedMessage()).isInstanceOfSatisfying(QuestionOpenedMessage.class,
+        message -> assertThat(message.questionNo()).isEqualTo(2));
+  }
+
+  @Test
+  @DisplayName("열렸거나 아직 공개 전인 문항이 남으면 결과의 정답을 발행하지 않는다")
+  void finishQuiz_beforeAllQuestionsClose_doesNotPublishAnswers() {
+    QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    given(quizRunRepository.findByIdAndRoomId(77L, 42L)).willReturn(Optional.of(run));
+    for (RunQuestionStatus status : List.of(RunQuestionStatus.READY, RunQuestionStatus.OPEN)) {
+      given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(
+          RunQuestion.builder().status(status).build()));
+
+      assertThat(quizCoreTxService.finishQuiz(42L, 77L)).isNull();
+      assertThat(run.isRunning()).isTrue();
+    }
+    verifyNoInteractions(eventPublisher, quizResultService);
+  }
+
+  @Test
+  @DisplayName("closeQuestion: 이미 닫힌 문항에 늦은 마감 예약이 실행되면 아무것도 바꾸지 않고 발행하지 않는다 (#23)")
+  void closeQuestion_alreadyClosed_lateScheduledCallDoesNothing() {
+    Instant closedAt = Instant.parse("2026-11-04T10:00:05Z");
+    QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    // 전원 응답으로 마감 예정 시각(10:00:20)보다 먼저 닫힌 문항
+    RunQuestion question = RunQuestion.builder().id(811L).quizRun(run).orderNo(1)
+        .status(RunQuestionStatus.CLOSED).closesAt(Instant.parse("2026-11-04T10:00:20Z")).closedAt(closedAt).build();
+    given(runQuestionRepository.findById(811L)).willReturn(Optional.of(question));
+
+    CloseQuestionResult result = quizCoreTxService.closeQuestion(42L, 811L);
+
+    assertThat(result.processed()).isFalse();
+    assertThat(question.getClosedAt()).isEqualTo(closedAt);
+    verify(runQuestionRepository, never()).save(any());
+    verifyNoInteractions(eventPublisher);
+  }
+
+  @Test
+  @DisplayName("closeQuestion: 마감 예약이 늦게 실행돼도 닫힌 시각은 closesAt + 1초로 기록하고, 다음 문항은 실제 처리 3초 뒤에 연다 (#23)")
+  void closeQuestion_lateExecution_recordsClosesAtPlusOneSecond() {
+    Instant closesAt = Instant.parse("2026-11-04T10:00:20Z");
+    // 가짜 시계: 마감 예정 시각보다 5초 늦게 실행된 상황
+    QuizCoreTxService lateService = serviceAt(Instant.parse("2026-11-04T10:00:25Z"));
+    QuizRun run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    RunQuestion question = RunQuestion.builder().id(811L).quizRun(run).orderNo(1)
+        .status(RunQuestionStatus.OPEN).closesAt(closesAt).build();
+    given(runQuestionRepository.findById(811L)).willReturn(Optional.of(question));
+    given(runQuestionRepository.findByQuizRunIdOrderByOrderNoAsc(77L)).willReturn(List.of(question));
+
+    CloseQuestionResult result = lateService.closeQuestion(42L, 811L);
+
+    assertThat(result.processed()).isTrue();
+    assertThat(question.getClosedAt()).isEqualTo(Instant.parse("2026-11-04T10:00:21Z"));
+    // 피드백 3초는 실제로 닫은 10:00:25부터 센다. 기록 시각(21초) 기준이면 이미 지난 24초가 된다.
+    assertThat(result.nextOpensAt()).isEqualTo(Instant.parse("2026-11-04T10:00:28Z"));
+  }
+
+  /** 지정한 시각에 멈춘 시계로 서비스를 하나 더 만든다. 목은 이 테스트 클래스의 것을 그대로 쓴다. */
+  private QuizCoreTxService serviceAt(Instant now) {
+    return new QuizCoreTxService(
+        quizRunRepository,
+        runQuestionRepository,
+        runChoiceRepository,
+        quizResultService,
+        roomPort,
+        questionSetPort,
+        eventPublisher,
+        Clock.fixed(now, ZoneOffset.UTC)
+    );
+  }
+
+  private QuizMessage publishedMessage() {
+    ArgumentCaptor<QuizStateChangedEvent> event = ArgumentCaptor.forClass(QuizStateChangedEvent.class);
+    verify(eventPublisher).publishEvent(event.capture());
+    assertThat(event.getValue().roomId()).isEqualTo(42L);
+    return event.getValue().message();
   }
 }

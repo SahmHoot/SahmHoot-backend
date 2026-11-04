@@ -24,11 +24,13 @@ import com.sahmhoot.quiz.repository.AnswerRepository;
 import com.sahmhoot.quiz.repository.QuizRunRepository;
 import com.sahmhoot.quiz.repository.RunChoiceRepository;
 import com.sahmhoot.quiz.repository.RunQuestionRepository;
+import com.sahmhoot.quiz.schedule.QuizTaskScheduler;
 import com.sahmhoot.quiz.service.port.QuestionSetPort;
 import com.sahmhoot.quiz.service.port.QuestionSetSnapshot;
 import com.sahmhoot.quiz.service.port.RoomPort;
 import com.sahmhoot.quiz.service.port.RoomSnapshot;
 import com.sahmhoot.quiz.service.port.RoomStatus;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -40,6 +42,7 @@ import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -126,6 +129,12 @@ class QuizCoreTransactionIntegrationTest {
       return mock(QuestionSetPort.class);
     }
 
+    /** 운영과 같은 진짜 시계. 이 테스트는 트랜잭션 경계만 보므로 시각을 고정할 필요가 없다. */
+    @Bean
+    public Clock clock() {
+      return Clock.systemUTC();
+    }
+
     @Bean
     public QuizCoreTxService quizCoreTxService(
         QuizRunRepository quizRunRepository,
@@ -133,7 +142,9 @@ class QuizCoreTransactionIntegrationTest {
         RunChoiceRepository runChoiceRepository,
         QuizResultService quizResultService,
         RoomPort roomPort,
-        QuestionSetPort questionSetPort
+        QuestionSetPort questionSetPort,
+        ApplicationEventPublisher eventPublisher,
+        Clock clock
     ) {
       return new QuizCoreTxService(
           quizRunRepository,
@@ -141,25 +152,35 @@ class QuizCoreTransactionIntegrationTest {
           runChoiceRepository,
           quizResultService,
           roomPort,
-          questionSetPort
+          questionSetPort,
+          eventPublisher,
+          clock
       );
+    }
+
+    /** 가짜 예약 도구. 이 테스트는 트랜잭션 경계만 보므로 예약은 실행하지 않는다. */
+    @Bean
+    public QuizTaskScheduler quizTaskScheduler() {
+      return mock(QuizTaskScheduler.class);
     }
 
     @Bean
     public QuizCoreService quizCoreService(
         RoomLockManager roomLockManager,
-        QuizCoreTxService quizCoreTxService
+        QuizCoreTxService quizCoreTxService,
+        QuizTaskScheduler quizTaskScheduler
     ) {
-      return new QuizCoreService(roomLockManager, quizCoreTxService);
+      return new QuizCoreService(roomLockManager, quizCoreTxService, quizTaskScheduler);
     }
 
     @Bean
     public AnswerTxService answerTxService(
         AnswerRepository answerRepository,
         RunQuestionRepository runQuestionRepository,
-        RunChoiceRepository runChoiceRepository
+        RunChoiceRepository runChoiceRepository,
+        Clock clock
     ) {
-      return new AnswerTxService(answerRepository, runQuestionRepository, runChoiceRepository);
+      return new AnswerTxService(answerRepository, runQuestionRepository, runChoiceRepository, clock);
     }
 
     @Bean
@@ -238,9 +259,9 @@ class QuizCoreTransactionIntegrationTest {
     Long questionSetId = 7L;
     StartQuizRequest request = new StartQuizRequest(questionSetId);
 
-    given(roomPort.getRoom(roomId)).willReturn(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN));
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN)));
     given(quizRunRepository.existsByRoomIdAndStatus(roomId, QuizRunStatus.RUNNING)).willReturn(false);
-    given(questionSetPort.getQuestionSet(questionSetId)).willReturn(new QuestionSetSnapshot(questionSetId, hostUserId));
+    given(questionSetPort.findQuestionSet(questionSetId)).willReturn(Optional.of(new QuestionSetSnapshot(questionSetId, hostUserId, "자료구조")));
 
     QuizRun savedRun = QuizRun.builder()
         .id(77L)
@@ -327,7 +348,7 @@ class QuizCoreTransactionIntegrationTest {
     Long unauthorizedUserId = 99L;
     StartQuizRequest request = new StartQuizRequest(7L);
 
-    given(roomPort.getRoom(roomId)).willReturn(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN));
+    given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.OPEN)));
 
     assertThatThrownBy(() -> quizCoreService.startQuiz(roomId, request, unauthorizedUserId))
         .isInstanceOf(BusinessException.class)

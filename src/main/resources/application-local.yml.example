@@ -2,10 +2,15 @@ spring:
   datasource:
     password: 여기에_로컬_DB_비밀번호
 
-# 선택: 비워 두면 JWT는 임시 키, 인증 메일은 서버 로그로 대신한다
-#app:
-#  jwt:
-#    secret: 32바이트_이상의_임의_문자열
+app:
+  seed:
+    enabled: true
+  # 선택: 비워 두면 JWT는 임시 키
+  #jwt:
+  #  secret: 32바이트_이상의_임의_문자열
+
+# 선택: 비워 두면 인증 메일은 서버 로그로 대신한다.
+# 메일 설정은 위 spring 아래에 합쳐서 작성한다.
 #spring:
 #  mail:
 #    host: smtp.gmail.com
