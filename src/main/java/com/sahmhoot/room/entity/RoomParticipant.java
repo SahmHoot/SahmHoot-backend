@@ -31,4 +31,8 @@ public class RoomParticipant {
     this.nickname = nickname;
     this.joinedAt = Instant.now().truncatedTo(ChronoUnit.SECONDS);
   }
+
+  public void rejoin() {
+    leftAt = null;
+  }
 }

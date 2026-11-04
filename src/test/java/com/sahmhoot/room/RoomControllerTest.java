@@ -1,5 +1,6 @@
 package com.sahmhoot.room;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -11,12 +12,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.sahmhoot.auth.AuthUser;
 import com.sahmhoot.room.controller.RoomController;
+import com.sahmhoot.room.dto.JoinRoomRequest;
+import com.sahmhoot.room.dto.JoinRoomResponse;
+import com.sahmhoot.room.dto.RoomByCodeResponse;
 import com.sahmhoot.room.dto.RoomSummaryResponse;
 import com.sahmhoot.room.entity.RoomStatus;
 import com.sahmhoot.room.exception.RoomErrorCode;
 import com.sahmhoot.room.exception.RoomException;
 import com.sahmhoot.room.exception.RoomExceptionHandler;
 import com.sahmhoot.room.service.RoomManagementService;
+import com.sahmhoot.room.service.RoomEntryService;
 import com.sahmhoot.room.service.RoomService;
 import com.sahmhoot.user.Role;
 import java.time.Instant;
@@ -37,10 +42,11 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 class RoomControllerTest {
   private final RoomService service = mock(RoomService.class);
   private final RoomManagementService management = mock(RoomManagementService.class);
+  private final RoomEntryService entry = mock(RoomEntryService.class);
   private MockMvc mvc;
 
   @BeforeEach void setup() {
-    mvc = MockMvcBuilders.standaloneSetup(new RoomController(service, management))
+    mvc = MockMvcBuilders.standaloneSetup(new RoomController(service, management, entry))
         .setControllerAdvice(new RoomExceptionHandler())
         .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver()).build();
     SecurityContextHolder.getContext().setAuthentication(
@@ -50,6 +56,54 @@ class RoomControllerTest {
 
   @AfterEach void clear() {
     SecurityContextHolder.clearContext();
+  }
+
+  @Test void byCodeUsesAuthenticatedUserAndReturnsSevenContractFields() throws Exception {
+    when(entry.byCode(1L, "123456")).thenReturn(new RoomByCodeResponse(
+        42L, "자료구조", "담당교수", RoomStatus.OPEN, false, false, null));
+
+    mvc.perform(get("/api/rooms/by-code/123456"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(7))
+        .andExpect(jsonPath("$.roomId").value(42))
+        .andExpect(jsonPath("$.title").value("자료구조"))
+        .andExpect(jsonPath("$.ownerName").value("담당교수"))
+        .andExpect(jsonPath("$.status").value("OPEN"))
+        .andExpect(jsonPath("$.joined").value(false))
+        .andExpect(jsonPath("$.isOwner").value(false))
+        .andExpect(jsonPath("$.myNickname").value(nullValue()));
+    verify(entry).byCode(1L, "123456");
+    verifyNoInteractions(service, management);
+  }
+
+  @ParameterizedTest @ValueSource(booleans = {true, false})
+  void joinReturns201ForFirstEntryAnd200ForReentry(boolean created) throws Exception {
+    var request = new JoinRoomRequest("학생닉네임");
+    when(entry.join(1L, "123456", request)).thenReturn(new RoomEntryService.EntryResult(
+        new JoinRoomResponse(42L, 900L, "학생닉네임"), created));
+
+    mvc.perform(post("/api/rooms/by-code/123456/participants")
+        .contentType(MediaType.APPLICATION_JSON).content("{\"nickname\":\"  학생닉네임  \"}"))
+        .andExpect(status().is(created ? 201 : 200))
+        .andExpect(jsonPath("$.length()").value(3))
+        .andExpect(jsonPath("$.roomId").value(42))
+        .andExpect(jsonPath("$.participantId").value(900))
+        .andExpect(jsonPath("$.nickname").value("학생닉네임"));
+    verify(entry).join(1L, "123456", request);
+    verifyNoInteractions(service, management);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"{}", "{\"nickname\":null}", "{\"nickname\":\"\"}",
+      "{\"nickname\":\"   \"}", "{\"nickname\":\" 가 \"}", "{\"nickname\":\"가나다라마바사아자차카\"}"})
+  void invalidNicknameIsRejectedBeforeCallingEntryService(String body) throws Exception {
+    mvc.perform(post("/api/rooms/by-code/123456/participants")
+        .contentType(MediaType.APPLICATION_JSON).content(body))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.status").value(400))
+        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+        .andExpect(jsonPath("$.fieldErrors[0].field").value("nickname"));
+    verifyNoInteractions(entry, service, management);
   }
 
   @ParameterizedTest @ValueSource(strings = {"text/plain", "application/xml"})
