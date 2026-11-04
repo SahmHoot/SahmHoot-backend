@@ -71,13 +71,46 @@ class QuestionSetControllerTest {
 
   @Test void allEndpointsRejectMissingAuthentication() throws Exception {
     SecurityContextHolder.clearContext();
-    var requests = List.of(get("/api/question-sets/mine"), get("/api/question-sets/7"),
+    var requests = List.of(get("/api/question-sets/mine"), get("/api/question-sets/public"), get("/api/question-sets/7"),
         post("/api/question-sets").content("{\"title\":\"세트\"}"),
         patch("/api/question-sets/7").content("{}"), delete("/api/question-sets/7"));
     for (var request : requests) {
       mvc.perform(request.contentType(MediaType.APPLICATION_JSON)).andExpect(status().isUnauthorized())
           .andExpect(jsonPath("$.status").value(401)).andExpect(jsonPath("$.code").value("UNAUTHORIZED"))
           .andExpect(jsonPath("$.fieldErrors").doesNotExist());
+    }
+    verifyNoInteractions(sets);
+  }
+
+  @Test void publicPageMatchesV15ContractForStudentsAndProfessors() throws Exception {
+    var item = new PublicQuestionSetSummaryResponse(7L, "세트", "교수", 1,
+        Instant.parse("2026-10-14T10:00:00Z"));
+    when(sets.publicSets(0, 20)).thenReturn(
+        new PublicQuestionSetPageResponse(List.of(item), 0, 20, 1, 1));
+    for (String role : List.of("STUDENT", "PROFESSOR")) {
+      when(users.findById(42L)).thenReturn(Optional.of(new QuestionSetCurrentUser(42L, role, "사용자")));
+      mvc.perform(get("/api/question-sets/public")).andExpect(status().isOk())
+          .andExpect(content().json("""
+              {"content":[{"id":7,"title":"세트","ownerName":"교수","questionCount":1,
+                "updatedAt":"2026-10-14T10:00:00Z"}],
+               "page":0,"size":20,"totalElements":1,"totalPages":1}
+              """, org.springframework.test.json.JsonCompareMode.STRICT));
+    }
+    when(sets.publicSets(2, 3)).thenReturn(new PublicQuestionSetPageResponse(List.of(), 2, 3, 4, 2));
+    mvc.perform(get("/api/question-sets/public").param("page", "2").param("size", "3"))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.page").value(2))
+        .andExpect(jsonPath("$.size").value(3)).andExpect(jsonPath("$.content").isEmpty());
+    verify(sets).publicSets(2, 3);
+  }
+
+  @Test void invalidPublicPageParametersUseValidationErrors() throws Exception {
+    for (var input : List.of(new String[]{"page", "-1"}, new String[]{"page", "bad"},
+        new String[]{"page", "2147483648"}, new String[]{"size", "0"},
+        new String[]{"size", "-1"}, new String[]{"size", "101"}, new String[]{"size", "bad"})) {
+      mvc.perform(get("/api/question-sets/public").param(input[0], input[1]))
+          .andExpect(status().isBadRequest()).andExpect(jsonPath("$.status").value(400))
+          .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+          .andExpect(jsonPath("$.fieldErrors[0].field").value(input[0]));
     }
     verifyNoInteractions(sets);
   }

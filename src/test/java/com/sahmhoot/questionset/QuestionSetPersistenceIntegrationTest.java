@@ -96,6 +96,76 @@ class QuestionSetPersistenceIntegrationTest {
     assertThat(detail.questions()).isEmpty();
   }
 
+  @Test void publicListFiltersBeforePagingAndCountAcrossOwners() throws Exception {
+    Long first = create(Visibility.PUBLIC);
+    Long privateId = create(Visibility.PRIVATE);
+    var other = createUser("PROFESSOR");
+    jdbc.update("UPDATE users SET name = '다른 교수' WHERE id = ?", other.id());
+    Long second = sets.create(other, new CreateQuestionSetRequest("다른 공개", null, Visibility.PUBLIC)).id();
+    Long third = create(Visibility.PUBLIC);
+    choices(question(first, 1));
+    choices(question(first, 2));
+    jdbc.update("UPDATE question_sets SET updated_at = '2026-01-01 00:00:00' WHERE id IN (?, ?, ?)",
+        first, second, third);
+    jdbc.update("UPDATE question_sets SET updated_at = '2026-01-02 00:00:00' WHERE id = ?", first);
+
+    var page = sets.publicSets(0, 2);
+    assertThat(page.content()).extracting(PublicQuestionSetSummaryResponse::id).containsExactly(first, third);
+    assertThat(page.content().getFirst().questionCount()).isEqualTo(2);
+    assertThat(page.content().getFirst().ownerName()).isEqualTo("테스트");
+    assertThat(page.content().getFirst().updatedAt()).isEqualTo(java.time.Instant.parse("2026-01-02T00:00:00Z"));
+    assertThat(page.totalElements()).isEqualTo(3);
+    assertThat(page.totalPages()).isEqualTo(2);
+    var last = sets.publicSets(1, 2);
+    assertThat(last.content()).extracting(PublicQuestionSetSummaryResponse::id).containsExactly(second);
+    assertThat(last.content().getFirst().ownerName()).isEqualTo("다른 교수");
+    assertThat(last.content().getFirst().questionCount()).isZero();
+    assertThat(sets.publicSets(0, 3).totalPages()).isEqualTo(1);
+    for (int requestedPage : List.of(2, Integer.MAX_VALUE)) {
+      var outside = sets.publicSets(requestedPage, 2);
+      assertThat(outside.content()).isEmpty();
+      assertThat(outside.totalElements()).isEqualTo(3);
+      assertThat(outside.totalPages()).isEqualTo(2);
+    }
+    for (var actor : List.of(student, professor, other)) {
+      mvc.perform(get("/api/question-sets/public").with(user(actor.id().toString())))
+          .andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(3))
+          .andExpect(jsonPath("$.content.length()").value(3))
+          .andExpect(jsonPath("$.content[*].id", org.hamcrest.Matchers.not(
+              org.hamcrest.Matchers.hasItem(privateId.intValue()))));
+    }
+    mvc.perform(get("/api/question-sets/public"))
+        .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+  }
+
+  @Test void privateOnlyDatabaseHasEmptyPublicPage() throws Exception {
+    create(Visibility.PRIVATE);
+    mvc.perform(get("/api/question-sets/public").with(user(student.id().toString())))
+        .andExpect(status().isOk()).andExpect(content().json("""
+            {"content":[],"page":0,"size":20,"totalElements":0,"totalPages":0}
+            """, org.springframework.test.json.JsonCompareMode.STRICT));
+  }
+
+  @Test void publicReviewIncludesAnswersAndPrivateDetailsKeepOwnershipPolicy() throws Exception {
+    Long id = create(Visibility.PUBLIC);
+    choices(question(id, 1));
+    mvc.perform(get("/api/question-sets/" + id).with(user(student.id().toString())))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.questions[0].choices[0].isCorrect").value(true))
+        .andExpect(jsonPath("$.questions[0].choices[1].isCorrect").value(false));
+    var patch = new UpdateQuestionSetRequest();
+    patch.readVisibility(Visibility.PRIVATE);
+    sets.update(id, professor.id(), patch);
+    assertThat(sets.publicSets(0, 20).totalElements()).isZero();
+    for (var actor : List.of(student, createUser("PROFESSOR"))) {
+      mvc.perform(get("/api/question-sets/" + id).with(user(actor.id().toString())))
+          .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("FORBIDDEN"));
+    }
+    mvc.perform(get("/api/question-sets/" + id).with(user(professor.id().toString())))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.visibility").value("PRIVATE"))
+        .andExpect(jsonPath("$.questions[0].choices[0].isCorrect").value(true));
+  }
+
   @Test void mineIsScopedAndSortedWithQuestionCountAndUsage() {
     Long first = create(null);
     Long second = create(Visibility.PUBLIC);

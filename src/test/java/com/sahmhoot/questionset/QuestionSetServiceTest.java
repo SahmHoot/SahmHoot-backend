@@ -41,6 +41,27 @@ class QuestionSetServiceTest {
     verifyNoInteractions(sets, query);
   }
 
+  @Test void publicPageUsesFilteredCountAndLongOffset() {
+    when(query.countPublicSets()).thenReturn(5L);
+    when(query.publicSets(2, 2L)).thenReturn(List.of());
+    var page = service.publicSets(1, 2);
+    assertThat(page.page()).isEqualTo(1);
+    assertThat(page.size()).isEqualTo(2);
+    assertThat(page.totalElements()).isEqualTo(5);
+    assertThat(page.totalPages()).isEqualTo(3);
+    service.publicSets(Integer.MAX_VALUE, 100);
+    verify(query).publicSets(100, 214748364700L);
+    verifyNoInteractions(sets, questions, choices);
+  }
+
+  @Test void emptyPublicPageHasZeroTotalPages() {
+    when(query.publicSets(20, 0L)).thenReturn(List.of());
+    var page = service.publicSets(0, 20);
+    assertThat(page.content()).isEmpty();
+    assertThat(page.totalElements()).isZero();
+    assertThat(page.totalPages()).isZero();
+  }
+
   @Test void ownershipIsRequiredForEveryMutation() {
     set();
     error(() -> service.update(7L, 2L, new UpdateQuestionSetRequest()), QuestionSetErrorCode.FORBIDDEN);
