@@ -33,6 +33,7 @@ import com.sahmhoot.quiz.repository.AnswerRepository;
 import com.sahmhoot.quiz.repository.QuizRunRepository;
 import com.sahmhoot.quiz.repository.RunChoiceRepository;
 import com.sahmhoot.quiz.repository.RunQuestionRepository;
+import com.sahmhoot.quiz.schedule.QuizTaskScheduler;
 import com.sahmhoot.quiz.service.port.QuestionSetPort;
 import com.sahmhoot.quiz.service.port.QuestionSetSnapshot;
 import com.sahmhoot.quiz.service.port.RoomPort;
@@ -124,6 +125,10 @@ class QuizCoreRealDbIntegrationTest {
 
   @MockitoBean
   private SimpMessagingTemplate messagingTemplate;
+
+  /** 이 테스트는 마감·다음 문항을 직접 호출한다. 진짜 예약이 남아 정리된 DB에 늦게 실행되지 않도록 가짜로 둔다. */
+  @MockitoBean
+  private QuizTaskScheduler taskScheduler;
 
   @Autowired
   private ApplicationEventPublisher eventPublisher;
