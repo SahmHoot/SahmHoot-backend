@@ -29,6 +29,24 @@ public class QuestionSetQueryRepository {
         (rs, row) -> summary(rs), setId);
   }
 
+  public long countPublicSets() {
+    return jdbc.queryForObject(
+        "SELECT COUNT(*) FROM question_sets WHERE visibility = 'PUBLIC'", Long.class);
+  }
+
+  public List<PublicQuestionSetSummaryResponse> publicSets(int size, long offset) {
+    return jdbc.query("""
+        SELECT s.id, s.title, u.name AS owner_name, s.updated_at,
+          (SELECT COUNT(*) FROM questions q WHERE q.question_set_id = s.id) AS question_count
+        FROM question_sets s JOIN users u ON u.id = s.host_id
+        WHERE s.visibility = 'PUBLIC'
+        ORDER BY s.updated_at DESC, s.id DESC
+        LIMIT ? OFFSET ?
+        """, (rs, row) -> new PublicQuestionSetSummaryResponse(rs.getLong("id"),
+            rs.getString("title"), rs.getString("owner_name"), rs.getLong("question_count"),
+            rs.getTimestamp("updated_at").toInstant()), size, offset);
+  }
+
   public boolean used(Long setId) {
     return Boolean.TRUE.equals(jdbc.queryForObject(
         "SELECT EXISTS(SELECT 1 FROM quiz_runs WHERE question_set_id = ?)", Boolean.class, setId));

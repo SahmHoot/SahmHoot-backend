@@ -21,6 +21,14 @@ public class QuestionSetService {
   private final QuestionSetQueryRepository query;
 
   @Transactional(readOnly = true)
+  public PublicQuestionSetPageResponse publicSets(int page, int size) {
+    long total = query.countPublicSets();
+    var content = query.publicSets(size, (long) page * size);
+    long totalPages = total / size + (total % size == 0 ? 0 : 1);
+    return new PublicQuestionSetPageResponse(content, page, size, total, totalPages);
+  }
+
+  @Transactional(readOnly = true)
   public List<QuestionSetSummaryResponse> mine(QuestionSetCurrentUser user) {
     requireProfessor(user);
     return query.mine(user.id());
