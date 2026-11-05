@@ -15,7 +15,6 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -31,13 +30,13 @@ public class RoomStateService {
   private final RoomParticipantRepository participants;
   private final RoomUserLookup users;
   private final RoomLockManager locks;
-  private final ObjectProvider<RoomQuizStatePort> quizzes;
+  private final RoomQuizStatePort quizzes;
   private final Clock clock;
   private final String joinBaseUrl;
   private final TransactionTemplate reading;
 
   public RoomStateService(RoomRepository rooms, RoomParticipantRepository participants,
-      RoomUserLookup users, RoomLockManager locks, ObjectProvider<RoomQuizStatePort> quizzes,
+      RoomUserLookup users, RoomLockManager locks, RoomQuizStatePort quizzes,
       Clock clock, PlatformTransactionManager transactions,
       @Value("${app.room.join-base-url:http://localhost:5173}") String joinBaseUrl) {
     this.rooms = rooms;
@@ -67,11 +66,9 @@ public class RoomStateService {
     boolean owner = room.getHostId().equals(userId);
     String ownerName = owner ? user.name() : users.findById(room.getHostId())
         .orElseThrow(() -> new RoomException(RoomErrorCode.ROOM_NOT_FOUND)).name();
-    var port = quizzes.getIfAvailable();
-    var snapshot = port == null ? RoomQuizStatePort.Snapshot.waiting()
-        : Objects.requireNonNull(port.read(roomId, participant.getId()), "Quiz state snapshot is required");
+    var snapshot = Objects.requireNonNull(quizzes.read(roomId, participant.getId()), "Quiz state snapshot is required");
     if (room.getStatus() == RoomStatus.PLAYING && snapshot.quiz() == null) {
-      throw new IllegalStateException("PLAYING 상태 조회에는 RoomQuizStatePort 구현이 필요합니다.");
+      throw new IllegalStateException("PLAYING 상태에 활성 퀴즈 스냅샷이 없습니다.");
     }
     Quiz quiz = room.getStatus() == RoomStatus.OPEN ? null : visibleQuiz(snapshot);
     Progress progress = owner && quiz != null && quiz.phase() == Phase.QUESTION

@@ -23,7 +23,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -35,12 +34,10 @@ class RoomStateServiceTest {
   private final RoomParticipantRepository participants = mock(RoomParticipantRepository.class);
   private final RoomUserLookup users = mock(RoomUserLookup.class);
   private final RoomLockManager locks = new RoomLockManager();
-  @SuppressWarnings("unchecked")
-  private final ObjectProvider<RoomQuizStatePort> providers = mock(ObjectProvider.class);
   private final RoomQuizStatePort quizzes = mock(RoomQuizStatePort.class);
   private final PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
   private final RoomStateService service = new RoomStateService(rooms, participants, users, locks,
-      providers, Clock.fixed(NOW, ZoneOffset.UTC), transactions, "https://class.example/");
+      quizzes, Clock.fixed(NOW, ZoneOffset.UTC), transactions, "https://class.example/");
   private Room room;
 
   @BeforeEach void setup() {
@@ -51,7 +48,6 @@ class RoomStateServiceTest {
     when(users.findById(2L)).thenReturn(Optional.of(new RoomUserLookup.RoomUser(2L, "STUDENT", "실명비공개")));
     member(1L, 100L, "담당교수");
     member(2L, 200L, "학생닉네임");
-    when(providers.getIfAvailable()).thenReturn(quizzes);
     when(quizzes.read(anyLong(), anyLong())).thenReturn(RoomQuizStatePort.Snapshot.waiting());
     when(transactions.getTransaction(any())).thenAnswer(call -> {
       assertThat(locks.isLocked(42L)).isTrue();
@@ -135,12 +131,11 @@ class RoomStateServiceTest {
     assertThat(student.quiz().nextOpensAt()).isEqualTo(phase == Phase.FEEDBACK ? NOW.plusSeconds(3) : null);
   }
 
-  @Test void playingWithoutProviderFailsInsteadOfPretendingToBeWaiting() {
-    when(providers.getIfAvailable()).thenReturn(null);
+  @Test void playingWithoutActiveQuizFailsInsteadOfPretendingToBeWaiting() {
     assertThat(service.state(42L, 2L).quiz()).isNull();
     room.startPlaying();
     assertThatThrownBy(() -> service.state(42L, 2L)).isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("RoomQuizStatePort");
+        .hasMessageContaining("활성 퀴즈 스냅샷");
     verify(transactions).rollback(any());
     assertThat(locks.isLocked(42L)).isFalse();
   }

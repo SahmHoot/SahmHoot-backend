@@ -21,4 +21,9 @@ public interface AnswerRepository extends JpaRepository<Answer, Long> {
 
   @Query("SELECT a FROM Answer a JOIN FETCH a.runChoice JOIN FETCH a.runQuestion rq WHERE rq.quizRun.id = :quizRunId")
   List<Answer> findByQuizRunIdWithRunChoice(@Param("quizRunId") Long quizRunId);
+
+  @Query("SELECT a FROM Answer a JOIN FETCH a.runChoice JOIN FETCH a.runQuestion rq "
+      + "WHERE rq.quizRun.id = :quizRunId AND a.participantId = :participantId ORDER BY rq.orderNo ASC")
+  List<Answer> findByQuizRunIdAndParticipantId(@Param("quizRunId") Long quizRunId,
+      @Param("participantId") Long participantId);
 }
