@@ -27,6 +27,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class RoomManagementService {
   private final RoomRepository rooms;
   private final RoomUserLookup users;
+  private final RoomPresenceService presence;
   private final RoomLockManager locks;
   private final RoomQuizAbortPort quizzes;
   private final ObjectProvider<RoomTaskCanceller> cancellers;
@@ -35,9 +36,10 @@ public class RoomManagementService {
 
   public RoomManagementService(RoomRepository rooms, RoomUserLookup users, RoomLockManager locks,
       RoomQuizAbortPort quizzes, ObjectProvider<RoomTaskCanceller> cancellers,
-      SimpMessagingTemplate messaging, PlatformTransactionManager transactions) {
+      SimpMessagingTemplate messaging, PlatformTransactionManager transactions, RoomPresenceService presence) {
     this.rooms = rooms;
     this.users = users;
+    this.presence = presence;
     this.locks = locks;
     this.quizzes = quizzes;
     this.cancellers = cancellers;
@@ -51,7 +53,7 @@ public class RoomManagementService {
     var user = users.findById(userId).orElseThrow(() -> new RoomException(RoomErrorCode.UNAUTHORIZED));
     if (!"PROFESSOR".equals(user.role())) throw new RoomException(RoomErrorCode.FORBIDDEN);
     return rooms.findByHostIdAndStatusNotOrderByCreatedAtDescIdDesc(userId, RoomStatus.CLOSED)
-        .stream().map(RoomSummaryResponse::from).toList();
+        .stream().map(room -> RoomSummaryResponse.from(room, presence.onlineCount(room))).toList();
   }
 
   @Transactional(propagation = Propagation.NOT_SUPPORTED)
