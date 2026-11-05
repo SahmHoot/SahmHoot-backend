@@ -4,6 +4,8 @@ import com.sahmhoot.questionset.auth.QuestionSetCurrentUserResolver;
 import com.sahmhoot.questionset.dto.*;
 import com.sahmhoot.questionset.service.QuestionSetService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Positive;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +21,16 @@ public class QuestionSetController {
 
   @GetMapping("/mine")
   public List<QuestionSetSummaryResponse> mine() { return service.mine(auth.requireUser()); }
+
+  @GetMapping("/public")
+  public PublicQuestionSetPageResponse publicSets(
+      @RequestParam(defaultValue = "0") @Min(value = 0, message = "페이지는 0 이상이어야 합니다.") int page,
+      @RequestParam(defaultValue = "20")
+      @Min(value = 1, message = "페이지 크기는 1~100이어야 합니다.")
+      @Max(value = 100, message = "페이지 크기는 1~100이어야 합니다.") int size) {
+    auth.requireUser();
+    return service.publicSets(page, size);
+  }
 
   @PostMapping
   @ResponseStatus(HttpStatus.CREATED)
