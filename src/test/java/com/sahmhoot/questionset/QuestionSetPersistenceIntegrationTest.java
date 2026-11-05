@@ -24,6 +24,8 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.transaction.AfterTransaction;
+import org.springframework.test.context.transaction.BeforeTransaction;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -42,8 +44,24 @@ class QuestionSetPersistenceIntegrationTest {
   @Autowired MockMvc mvc;
   private QuestionSetCurrentUser professor;
   private QuestionSetCurrentUser student;
+  private List<Long> existingPublicSetIds;
+
+  @BeforeTransaction void rememberPublicSets() {
+    existingPublicSetIds = publicSetIds();
+  }
+
+  @AfterTransaction void verifyPublicSetsRestored() {
+    assertThat(publicSetIds()).containsExactlyElementsOf(existingPublicSetIds);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM users WHERE id IN (?, ?)",
+        Long.class, professor.id(), student.id())).isZero();
+  }
+
+  private List<Long> publicSetIds() {
+    return jdbc.queryForList("SELECT id FROM question_sets WHERE visibility = 'PUBLIC' ORDER BY id", Long.class);
+  }
 
   @BeforeEach void setup() {
+    jdbc.update("UPDATE question_sets SET visibility = 'PRIVATE' WHERE visibility = 'PUBLIC'");
     professor = createUser("PROFESSOR");
     student = createUser("STUDENT");
   }

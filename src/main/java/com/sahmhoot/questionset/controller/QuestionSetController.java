@@ -24,8 +24,10 @@ public class QuestionSetController {
 
   @GetMapping("/public")
   public PublicQuestionSetPageResponse publicSets(
-      @RequestParam(defaultValue = "0") @Min(0) int page,
-      @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+      @RequestParam(defaultValue = "0") @Min(value = 0, message = "페이지는 0 이상이어야 합니다.") int page,
+      @RequestParam(defaultValue = "20")
+      @Min(value = 1, message = "페이지 크기는 1~100이어야 합니다.")
+      @Max(value = 100, message = "페이지 크기는 1~100이어야 합니다.") int size) {
     auth.requireUser();
     return service.publicSets(page, size);
   }

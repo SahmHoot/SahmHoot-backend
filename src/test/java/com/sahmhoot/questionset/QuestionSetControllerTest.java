@@ -115,6 +115,20 @@ class QuestionSetControllerTest {
     verifyNoInteractions(sets);
   }
 
+  @Test void publicPageBoundsReturnKoreanFieldErrors() throws Exception {
+    for (var input : List.of(new String[]{"page", "-1", "페이지는 0 이상이어야 합니다."},
+        new String[]{"size", "0", "페이지 크기는 1~100이어야 합니다."},
+        new String[]{"size", "101", "페이지 크기는 1~100이어야 합니다."})) {
+      mvc.perform(get("/api/question-sets/public").param(input[0], input[1]))
+          .andExpect(status().isBadRequest()).andExpect(jsonPath("$.status").value(400))
+          .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+          .andExpect(jsonPath("$.fieldErrors.length()").value(1))
+          .andExpect(jsonPath("$.fieldErrors[0].field").value(input[0]))
+          .andExpect(jsonPath("$.fieldErrors[0].message").value(input[2]));
+    }
+    verifyNoInteractions(sets);
+  }
+
   @Test void missingAuthenticationPrecedesMalformedInput() throws Exception {
     SecurityContextHolder.clearContext();
     mvc.perform(post("/api/question-sets").contentType(MediaType.APPLICATION_JSON).content("{"))
