@@ -14,6 +14,7 @@ public class ThreadPoolRoomPresenceScheduler implements RoomPresenceTaskSchedule
   public ThreadPoolRoomPresenceScheduler() {
     scheduler.setPoolSize(2);
     scheduler.setThreadNamePrefix("room-presence-");
+    scheduler.setRemoveOnCancelPolicy(true);
     scheduler.setWaitForTasksToCompleteOnShutdown(false);
     scheduler.initialize();
   }

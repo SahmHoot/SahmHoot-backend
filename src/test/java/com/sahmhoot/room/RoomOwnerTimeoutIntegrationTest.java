@@ -1,6 +1,7 @@
 package com.sahmhoot.room;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.Mockito.*;
 
 import com.sahmhoot.questionset.auth.QuestionSetCurrentUser;
@@ -114,22 +115,29 @@ class RoomOwnerTimeoutIntegrationTest {
   }
 
   @AfterEach void cleanup() {
-    management.close(roomId, owner.getId());
-    jdbc.update("DELETE FROM answers WHERE run_question_id IN (SELECT rq.id FROM run_questions rq "
-        + "JOIN quiz_runs r ON rq.quiz_run_id = r.id WHERE r.room_id = ?)", roomId);
-    jdbc.update("DELETE FROM run_choices WHERE run_question_id IN (SELECT rq.id FROM run_questions rq "
-        + "JOIN quiz_runs r ON rq.quiz_run_id = r.id WHERE r.room_id = ?)", roomId);
-    jdbc.update("DELETE FROM run_questions WHERE quiz_run_id IN (SELECT id FROM quiz_runs WHERE room_id = ?)", roomId);
-    jdbc.update("DELETE FROM quiz_runs WHERE room_id = ?", roomId);
-    jdbc.update("DELETE FROM room_participants WHERE room_id = ?", roomId);
-    jdbc.update("DELETE FROM rooms WHERE id = ?", roomId);
-    if (setId != null) {
-      jdbc.update("DELETE FROM choices WHERE question_id IN (SELECT id FROM questions WHERE question_set_id = ?)", setId);
-      jdbc.update("DELETE FROM questions WHERE question_set_id = ?", setId);
-      jdbc.update("DELETE FROM question_sets WHERE id = ?", setId);
-    }
-    users.deleteById(student.getId());
-    users.deleteById(owner.getId());
+    assertAll("자동 종료 DB 테스트 정리",
+        () -> { if (roomId != null) management.close(roomId, owner.getId()); },
+        () -> {
+          if (roomId == null) return;
+          assertAll(
+              () -> jdbc.update("DELETE FROM answers WHERE run_question_id IN (SELECT rq.id FROM run_questions rq "
+                  + "JOIN quiz_runs r ON rq.quiz_run_id = r.id WHERE r.room_id = ?)", roomId),
+              () -> jdbc.update("DELETE FROM run_choices WHERE run_question_id IN (SELECT rq.id FROM run_questions rq "
+                  + "JOIN quiz_runs r ON rq.quiz_run_id = r.id WHERE r.room_id = ?)", roomId),
+              () -> jdbc.update("DELETE FROM run_questions WHERE quiz_run_id IN (SELECT id FROM quiz_runs WHERE room_id = ?)", roomId),
+              () -> jdbc.update("DELETE FROM quiz_runs WHERE room_id = ?", roomId),
+              () -> jdbc.update("DELETE FROM room_participants WHERE room_id = ?", roomId),
+              () -> jdbc.update("DELETE FROM rooms WHERE id = ?", roomId));
+        },
+        () -> {
+          if (setId == null) return;
+          assertAll(
+              () -> jdbc.update("DELETE FROM choices WHERE question_id IN (SELECT id FROM questions WHERE question_set_id = ?)", setId),
+              () -> jdbc.update("DELETE FROM questions WHERE question_set_id = ?", setId),
+              () -> jdbc.update("DELETE FROM question_sets WHERE id = ?", setId));
+        },
+        () -> { if (student != null) users.deleteById(student.getId()); },
+        () -> { if (owner != null) users.deleteById(owner.getId()); });
   }
 
   @Test void thirtyMinuteTimeoutUsesNormalCloseAndPreservesQuizAndAnswerRecords() {

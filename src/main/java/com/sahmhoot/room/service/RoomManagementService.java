@@ -83,7 +83,7 @@ public class RoomManagementService {
         }
       });
       try {
-        messaging.convertAndSend("/topic/rooms/" + roomId + "/quiz", new RoomEndedMessage("ROOM_ENDED", clock.instant()));
+        messaging.convertAndSend("/topic/rooms/" + roomId + "/quiz", RoomEndedMessage.at(clock.instant()));
       } catch (RuntimeException error) {
         log.error("Room ended notification failed: roomId={}", roomId, error);
       }
