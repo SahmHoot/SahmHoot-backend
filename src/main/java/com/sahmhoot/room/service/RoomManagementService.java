@@ -11,6 +11,7 @@ import com.sahmhoot.room.repository.RoomRepository;
 import com.sahmhoot.room.service.port.RoomQuizAbortPort;
 import com.sahmhoot.room.service.port.RoomTaskCanceller;
 import java.time.Instant;
+import java.time.Clock;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -27,17 +28,21 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class RoomManagementService {
   private final RoomRepository rooms;
   private final RoomUserLookup users;
+  private final RoomPresenceService presence;
   private final RoomLockManager locks;
   private final RoomQuizAbortPort quizzes;
   private final ObjectProvider<RoomTaskCanceller> cancellers;
   private final SimpMessagingTemplate messaging;
   private final TransactionTemplate closing;
+  private final Clock clock;
 
   public RoomManagementService(RoomRepository rooms, RoomUserLookup users, RoomLockManager locks,
       RoomQuizAbortPort quizzes, ObjectProvider<RoomTaskCanceller> cancellers,
-      SimpMessagingTemplate messaging, PlatformTransactionManager transactions) {
+      SimpMessagingTemplate messaging, PlatformTransactionManager transactions, RoomPresenceService presence, Clock clock) {
     this.rooms = rooms;
     this.users = users;
+    this.presence = presence;
+    this.clock = clock;
     this.locks = locks;
     this.quizzes = quizzes;
     this.cancellers = cancellers;
@@ -51,7 +56,7 @@ public class RoomManagementService {
     var user = users.findById(userId).orElseThrow(() -> new RoomException(RoomErrorCode.UNAUTHORIZED));
     if (!"PROFESSOR".equals(user.role())) throw new RoomException(RoomErrorCode.FORBIDDEN);
     return rooms.findByHostIdAndStatusNotOrderByCreatedAtDescIdDesc(userId, RoomStatus.CLOSED)
-        .stream().map(RoomSummaryResponse::from).toList();
+        .stream().map(room -> RoomSummaryResponse.from(room, presence.onlineCount(room))).toList();
   }
 
   @Transactional(propagation = Propagation.NOT_SUPPORTED)
@@ -62,7 +67,7 @@ public class RoomManagementService {
         if (!room.getHostId().equals(userId)) throw new RoomException(RoomErrorCode.FORBIDDEN);
         if (room.getStatus() == RoomStatus.CLOSED) return false;
         quizzes.abortActiveQuiz(roomId);
-        room.close(Instant.now());
+        room.close(Instant.now(clock));
         rooms.saveAndFlush(room);
         return true;
       });
@@ -77,7 +82,7 @@ public class RoomManagementService {
         }
       });
       try {
-        messaging.convertAndSend("/topic/rooms/" + roomId + "/quiz", RoomEndedMessage.now());
+        messaging.convertAndSend("/topic/rooms/" + roomId + "/quiz", new RoomEndedMessage("ROOM_ENDED", clock.instant()));
       } catch (RuntimeException error) {
         log.error("Room ended notification failed: roomId={}", roomId, error);
       }
