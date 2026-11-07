@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
  * <p>스케줄러는 이 클래스 안에서만 만들고 스프링 빈으로 공개하지 않는다. {@code WebSocketConfig}의
  * STOMP 하트비트 스케줄러와 섞이지 않게 하기 위해서다.
  *
- * <p>예약은 메모리에만 있으므로 서버를 재시작하면 사라진다. 재시작 후 복구는 #25 범위다.
+ * <p>예약은 메모리에만 있으므로 서버를 재시작하면 사라진다. QuizRecoveryService가 DB 상태로 복원한다.
  */
 @Slf4j
 @Component

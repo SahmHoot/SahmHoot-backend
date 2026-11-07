@@ -16,9 +16,9 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
  * 상태 조회에도 QUESTION_CLOSED와 자동 진행 예약이 쓰는 정확한 시각을 제공한다.
- * 지연 마감 때 closedAt은 closesAt + 1초로 제한되므로 closedAt + 3초로 계산하면 안 된다.
+ * 지연 마감 때 closedAt은 closesAt + 1초로 제한되므로, 메모리 값이 있으면 실제 예약 시각을 쓴다.
  * 방 잠금 안에서 커밋된 이벤트만 반영하며, 다음 상태로 넘어가면 방의 항목을 지운다.
- * 예약과 마찬가지로 메모리 상태다. 서버 재시작 시 복구는 #25에서 함께 다룬다.
+ * 예약과 마찬가지로 메모리 상태다. 재시작 후에는 조회와 QuizRecoveryService가 closedAt + 3초를 사용한다.
  */
 @Component
 public class QuizFeedbackState {

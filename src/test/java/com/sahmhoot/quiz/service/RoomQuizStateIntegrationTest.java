@@ -205,6 +205,19 @@ class RoomQuizStateIntegrationTest {
         .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("ROOM_CLOSED"));
   }
 
+  @Test void feedbackDeadlineFallsBackToClosedAtAfterRestart() throws Exception {
+    var started = start();
+    // 재시작 후 메모리 이벤트가 없는 상황을 DB의 마감 기록으로 재현한다.
+    jdbc.update("UPDATE run_questions SET status = 'CLOSED', closed_at = ? WHERE id = ?",
+        java.sql.Timestamp.from(T0.plusSeconds(5)), started.firstRunQuestionId());
+    assertThat(feedback.nextOpensAt(roomId, started.runId(), started.firstRunQuestionId())).isEmpty();
+
+    for (User user : List.of(student, owner)) {
+      state(user).andExpect(jsonPath("$.quiz.phase").value("FEEDBACK"))
+          .andExpect(jsonPath("$.quiz.nextOpensAt").value(T0.plusSeconds(8).toString()));
+    }
+  }
+
   @Test void rolledBackCloseNeverChangesSnapshotOrFeedbackDeadline() throws Exception {
     var started = start();
     clock.setTo(T0.plusSeconds(5));

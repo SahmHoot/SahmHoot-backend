@@ -24,6 +24,7 @@ import com.sahmhoot.quiz.entity.RunQuestion;
 import com.sahmhoot.quiz.entity.RunQuestionStatus;
 import com.sahmhoot.quiz.exception.BusinessException;
 import com.sahmhoot.quiz.exception.ErrorCode;
+import com.sahmhoot.quiz.lock.RoomLockManager;
 import com.sahmhoot.quiz.repository.RunChoiceRepository;
 import com.sahmhoot.quiz.repository.RunQuestionRepository;
 import com.sahmhoot.quiz.schedule.ManualQuizTaskScheduler;
@@ -97,6 +98,9 @@ class QuizAutoProgressIntegrationTest {
   @Autowired QuestionSetService setService;
   @Autowired QuestionService questionService;
   @Autowired QuizCoreService quizCoreService;
+  @Autowired QuizRecoveryService recovery;
+  @Autowired QuizRecoveryReader recoveryReader;
+  @Autowired RoomLockManager locks;
   @Autowired AnswerService answerService;
   @Autowired RunQuestionRepository runQuestions;
   @Autowired RunChoiceRepository runChoices;
@@ -285,6 +289,147 @@ class QuizAutoProgressIntegrationTest {
 
     assertThat(runQuestions.findByQuizRunIdOrderByOrderNoAsc(started.runId()).get(1).getOpenedAt())
         .isEqualTo(T0.plusSeconds(19));
+  }
+
+  @Test
+  @DisplayName("메모리 예약을 잃어도 DB의 기존 마감 시각을 복구하고 전체 퀴즈를 중복 없이 끝낸다 (#25)")
+  void recoversOpenQuestionWithoutResettingItsTime() {
+    StartQuizResponse started = startQuiz(10, 20);
+    scheduler.reset();
+    clock.setTo(T0.plusSeconds(5));
+
+    recovery.recoverRunningQuizzes();
+
+    RunQuestion first = runQuestions.findById(started.firstRunQuestionId()).orElseThrow();
+    assertThat(first.getOpenedAt()).isEqualTo(T0);
+    assertThat(first.getClosesAt()).isEqualTo(T0.plusSeconds(10));
+    assertThat(scheduler.pendingTimes()).containsExactly(T0.plusSeconds(11));
+    scheduler.runAll();
+    assertThat(runStatus(started.runId())).isEqualTo("FINISHED");
+    assertThat(sentMessageTypes()).containsExactly(QuestionOpenedMessage.class, QuestionClosedMessage.class,
+        QuestionOpenedMessage.class, QuestionClosedMessage.class, QuizFinishedMessage.class);
+  }
+
+  @Test
+  @DisplayName("재시작 시 이미 지난 열린 문항을 즉시 닫고 처리 시각부터 피드백 3초를 보장한다 (#25)")
+  void recoversExpiredOpenQuestion() {
+    StartQuizResponse started = startQuiz(10, 20);
+    scheduler.reset();
+    clock.setTo(T0.plusSeconds(50));
+
+    recovery.recoverRunningQuizzes();
+
+    RunQuestion first = runQuestions.findById(started.firstRunQuestionId()).orElseThrow();
+    assertThat(first.isClosed()).isTrue();
+    assertThat(first.getClosedAt()).isEqualTo(T0.plusSeconds(11));
+    assertThat(scheduler.pendingTimes()).containsExactly(T0.plusSeconds(53));
+    // 즉시 마감 직후 다시 복구해도 기록용 closedAt 때문에 피드백이 조기에 끝나지 않는다.
+    recovery.recoverRunningQuizzes();
+    assertThat(scheduler.pendingTimes()).containsExactly(T0.plusSeconds(53));
+    scheduler.runAll();
+    assertThat(runStatus(started.runId())).isEqualTo("FINISHED");
+  }
+
+  @Test
+  @DisplayName("마감 이벤트의 메모리가 없어도 DB closedAt + 3초에 다음 문항을 예약한다 (#25)")
+  void recoversRemainingFeedbackFromDatabase() {
+    StartQuizResponse started = startQuiz(10, 20);
+    loseScheduleDuringFeedback(started, T0.plusSeconds(5));
+    clock.setTo(T0.plusSeconds(6));
+
+    recovery.recoverRunningQuizzes();
+
+    assertThat(scheduler.pendingTimes()).containsExactly(T0.plusSeconds(8));
+    scheduler.runNext();
+    RunQuestion next = runQuestions.findByQuizRunIdOrderByOrderNoAsc(started.runId()).get(1);
+    assertThat(next.isOpen()).isTrue();
+    assertThat(next.getOpenedAt()).isEqualTo(T0.plusSeconds(8));
+    assertThat(scheduler.pendingTimes()).containsExactly(T0.plusSeconds(29));
+  }
+
+  @Test
+  @DisplayName("피드백 종료 시각이 지났으면 다음 문항을 지금 열고 그 문항의 제한 시간은 온전히 준다 (#25)")
+  void recoversOverdueFeedbackWithoutSkippingNextQuestion() {
+    StartQuizResponse started = startQuiz(10, 20);
+    loseScheduleDuringFeedback(started, T0.plusSeconds(5));
+    clock.setTo(T0.plusSeconds(30));
+
+    recovery.recoverRunningQuizzes();
+
+    RunQuestion next = runQuestions.findByQuizRunIdOrderByOrderNoAsc(started.runId()).get(1);
+    assertThat(next.getOpenedAt()).isEqualTo(T0.plusSeconds(30));
+    assertThat(next.getClosesAt()).isEqualTo(T0.plusSeconds(50));
+    assertThat(scheduler.pendingTimes()).containsExactly(T0.plusSeconds(51));
+  }
+
+  @Test
+  @DisplayName("마지막 문항 피드백을 복구하면 남은 시간 뒤 결과를 한 번 발행한다 (#25)")
+  void recoversLastFeedbackAndFinishesOnce() {
+    StartQuizResponse started = startQuiz(10);
+    loseScheduleDuringFeedback(started, T0.plusSeconds(5));
+    clock.setTo(T0.plusSeconds(6));
+
+    recovery.recoverRunningQuizzes();
+
+    assertThat(scheduler.pendingTimes()).containsExactly(T0.plusSeconds(8));
+    scheduler.runNext();
+    recovery.recoverRunningQuizzes();
+    assertThat(runStatus(started.runId())).isEqualTo("FINISHED");
+    assertThat(scheduler.pendingCount()).isZero();
+    assertThat(sentMessageTypes()).containsExactly(QuestionOpenedMessage.class, QuizFinishedMessage.class);
+  }
+
+  @Test
+  @DisplayName("마지막 피드백도 지난 회차는 복구 즉시 DB에 FINISHED로 저장하고 결과를 발행한다 (#25)")
+  void recoversOverdueResultImmediately() {
+    StartQuizResponse started = startQuiz(10);
+    loseScheduleDuringFeedback(started, T0.plusSeconds(5));
+    clock.setTo(T0.plusSeconds(30));
+
+    recovery.recoverRunningQuizzes();
+
+    assertThat(runStatus(started.runId())).isEqualTo("FINISHED");
+    assertThat(scheduler.pendingCount()).isZero();
+    assertThat(sentMessageTypes()).containsExactly(QuestionOpenedMessage.class, QuizFinishedMessage.class);
+  }
+
+  @Test
+  @DisplayName("과거 복구 후보가 중단된 뒤 새 회차가 시작되면 과거 후보를 버리고 새 예약만 유지한다 (#25)")
+  void staleCandidateDoesNotReplaceNewRunSchedule() {
+    StartQuizResponse old = startQuiz(10);
+    var candidate = new QuizRecoveryReader.RunningQuiz(roomId, old.runId());
+    quizCoreService.abortQuiz(roomId, old.runId(), professor.getId());
+    StartQuizResponse current = startQuiz(20);
+
+    locks.executeWithLock(roomId, () -> assertThat(recoveryReader.read(candidate)).isEmpty());
+    recovery.recoverRunningQuizzes();
+
+    assertThat(scheduler.pendingTimes()).containsExactly(current.closesAt().plusSeconds(1));
+    assertThat(scheduler.pendingCount()).isOne();
+    assertThat(runStatus(old.runId())).isEqualTo("ABORTED");
+  }
+
+  @Test
+  @DisplayName("수업을 종료하면 복구한 예약을 취소하고 과거 후보 재조회도 빈 값이다 (#25)")
+  void roomClosureCancelsRecoveredSchedule() {
+    StartQuizResponse started = startQuiz(10);
+    scheduler.reset();
+    recovery.recoverRunningQuizzes();
+    roomManagement.close(roomId, professor.getId());
+
+    recovery.recoverRunningQuizzes();
+
+    assertThat(runStatus(started.runId())).isEqualTo("ABORTED");
+    assertThat(scheduler.pendingCount()).isZero();
+    locks.executeWithLock(roomId, () -> assertThat(recoveryReader.read(
+        new QuizRecoveryReader.RunningQuiz(roomId, started.runId()))).isEmpty());
+  }
+
+  /** DB에 마감만 남고 예약·마감 이벤트 캐시는 없어진 재시작 상황을 만든다. */
+  private void loseScheduleDuringFeedback(StartQuizResponse started, Instant closedAt) {
+    scheduler.reset();
+    jdbc.update("UPDATE run_questions SET status = 'CLOSED', closed_at = ? WHERE id = ?",
+        Timestamp.from(closedAt), started.firstRunQuestionId());
   }
 
   /** 주어진 제한시간(초)의 객관식 문항들로 세트를 만들고 T0에 퀴즈를 시작한다. */
