@@ -1,6 +1,6 @@
 package com.sahmhoot.room.service;
 
-import com.sahmhoot.quiz.lock.RoomLockManager;
+import com.sahmhoot.quiz.service.port.RoomLockPort;
 import com.sahmhoot.room.dto.message.OnlineCountMessage;
 import com.sahmhoot.room.service.port.RoomPresenceTaskScheduler;
 import com.sahmhoot.room.service.port.RoomTaskCanceller;
@@ -26,7 +26,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 public class RoomPresencePublisher implements RoomTaskCanceller {
   private final RoomPresenceService presence;
   private final RoomPresenceTaskScheduler scheduler;
-  private final RoomLockManager locks;
+  private final RoomLockPort locks;
   private final SimpMessagingTemplate messaging;
   private final Clock clock;
   private final Map<Long, Pending> pending = new ConcurrentHashMap<>();
@@ -34,12 +34,17 @@ public class RoomPresencePublisher implements RoomTaskCanceller {
   @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
   public void changed(RoomPresenceChangedEvent event) {
     // #65가 내부 잠금을 잡고 동기 알림을 보낼 수 있다. 여기서는 방 잠금·DB·#65 조회를 하지 않는다.
-    pending.compute(event.current().roomId(), (roomId, existing) -> {
-      Pending state = existing != null ? existing : new Pending(event.previous());
-      state.dirty = true;
-      if (state.future == null && !state.running) schedule(roomId, state);
-      return state;
-    });
+    try {
+      pending.compute(event.current().roomId(), (roomId, existing) -> {
+        Pending state = existing != null ? existing : new Pending(event.previous());
+        state.dirty = true;
+        if (state.future == null && !state.running) schedule(roomId, state);
+        return state;
+      });
+    } catch (RuntimeException error) {
+      // #65의 동기 이벤트를 중단시키면 다른 처리기와 모든 방의 연결 추적에 영향을 준다.
+      log.error("Room presence scheduling failed: roomId={}", event.current().roomId(), error);
+    }
   }
 
   private void schedule(Long roomId, Pending state) {
@@ -59,25 +64,32 @@ public class RoomPresencePublisher implements RoomTaskCanceller {
         return state;
       });
       if (!started.get()) return;
+      boolean retry = false;
       try {
         // compute를 벗어난 뒤 #65를 조회한다. #65 이벤트 콜백과의 잠금 역전을 피한다.
-        var change = presence.countChange(expected.previous);
+        // 종료와 발행 순서를 지키기 위해 공유 방 잠금은 발행까지 유지한다.
+        var change = presence.countChange(expected.previous, expected.lastCount);
         if (change.isEmpty()) { cancelAll(roomId); return; }
-        int before = expected.lastCount != null ? expected.lastCount : change.get().previous();
+        if (expected.lastCount == null) expected.lastCount = change.get().previous();
         int count = change.get().current();
-        if (before != count) {
+        if (expected.lastCount != count || expected.forcePublish) {
+          // 예외가 나도 일부 전송됐을 수 있으므로, 재시도에서는 최신 전체 값을 다시 보낸다.
+          expected.forcePublish = true;
           messaging.convertAndSend("/topic/rooms/" + roomId + "/presence",
               OnlineCountMessage.of(clock.instant(), count));
+          expected.forcePublish = false;
         }
         expected.lastCount = count;
       } catch (RuntimeException error) {
+        retry = true;
         log.error("Room presence publication failed: roomId={}", roomId, error);
       } finally {
+        boolean retryRequired = retry;
         pending.computeIfPresent(roomId, (id, state) -> {
           if (state != expected) return state;
           state.running = false;
-          if (!state.dirty) return null;
-          // 발행 도중 생긴 변경은 발행이 끝난 뒤부터 다시 1초를 기다린다.
+          if (!state.dirty && !retryRequired) return null;
+          // 실패와 발행 도중 생긴 변경은 작업이 끝난 뒤부터 다시 1초를 기다린다.
           schedule(roomId, state);
           return state;
         });
@@ -100,6 +112,7 @@ public class RoomPresencePublisher implements RoomTaskCanceller {
     Integer lastCount;
     boolean running;
     boolean dirty;
+    boolean forcePublish;
     Pending(RoomPresenceSnapshot previous) { this.previous = previous; }
   }
 }

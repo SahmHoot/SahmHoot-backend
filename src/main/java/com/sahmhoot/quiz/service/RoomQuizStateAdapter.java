@@ -64,7 +64,7 @@ public class RoomQuizStateAdapter implements RoomQuizStatePort {
         .map(RunChoice::getId).findFirst().orElseThrow() : null;
     Instant nextOpensAt = phase == Phase.FEEDBACK
         ? feedback.nextOpensAt(roomId, run.getId(), current.getId())
-            .orElseThrow(() -> new IllegalStateException("피드백 종료 예약 시각이 없습니다.")) : null;
+            .orElseGet(() -> current.getClosedAt().plusSeconds(3)) : null;
     var question = new CurrentQuestion(current.getId(), allQuestions.indexOf(current) + 1,
         current.getType().name(), current.getTimeLimitSeconds(), current.getContent(),
         currentChoices.stream().map(choice -> new Choice(choice.getId(), choice.getOrderNo(), choice.getContent())).toList(),

@@ -1,6 +1,6 @@
 package com.sahmhoot.room.service;
 
-import com.sahmhoot.quiz.lock.RoomLockManager;
+import com.sahmhoot.quiz.service.port.RoomLockPort;
 import com.sahmhoot.room.dto.RoomStateResponse;
 import com.sahmhoot.room.dto.RoomStateResponse.*;
 import com.sahmhoot.room.entity.Room;
@@ -29,7 +29,7 @@ public class RoomStateService {
   private final RoomRepository rooms;
   private final RoomParticipantRepository participants;
   private final RoomUserLookup users;
-  private final RoomLockManager locks;
+  private final RoomLockPort locks;
   private final RoomQuizStatePort quizzes;
   private final Clock clock;
   private final RoomPresenceService presence;
@@ -37,7 +37,7 @@ public class RoomStateService {
   private final TransactionTemplate reading;
 
   public RoomStateService(RoomRepository rooms, RoomParticipantRepository participants,
-      RoomUserLookup users, RoomLockManager locks, RoomQuizStatePort quizzes,
+      RoomUserLookup users, RoomLockPort locks, RoomQuizStatePort quizzes,
       Clock clock, RoomPresenceService presence, PlatformTransactionManager transactions,
       @Value("${app.room.join-base-url:http://localhost:5173}") String joinBaseUrl) {
     this.rooms = rooms;
