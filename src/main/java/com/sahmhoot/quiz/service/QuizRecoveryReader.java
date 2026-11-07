@@ -36,10 +36,10 @@ public class QuizRecoveryReader {
     if (latest.isEmpty() || !latest.get().getId().equals(candidate.runId())
         || !latest.get().isRunning()) return Optional.empty();
 
-    var copied = questions.findByQuizRunIdOrderByOrderNoAsc(candidate.runId()).stream()
+    var recoveryQuestions = questions.findByQuizRunIdOrderByOrderNoAsc(candidate.runId()).stream()
         .map(question -> new Question(question.getId(), question.getOrderNo(), question.getStatus(),
             question.getClosesAt(), question.getClosedAt())).toList();
-    return Optional.of(new Snapshot(candidate.roomId(), candidate.runId(), copied));
+    return Optional.of(new Snapshot(candidate.roomId(), candidate.runId(), recoveryQuestions));
   }
 
   public record RunningQuiz(Long roomId, Long runId) {}

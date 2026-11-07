@@ -7,7 +7,7 @@ import com.sahmhoot.quiz.service.QuizRecoveryReader.Question;
 import com.sahmhoot.quiz.service.QuizRecoveryReader.Snapshot;
 import java.time.Clock;
 import java.time.Instant;
-import java.util.Objects;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -46,34 +46,47 @@ public class QuizRecoveryService implements ApplicationRunner {
     var questions = snapshot.questions();
     if (questions.isEmpty()) throw new IllegalStateException("Running quiz has no questions");
 
-    int index = 0;
-    while (index < questions.size() && questions.get(index).status() == RunQuestionStatus.CLOSED) index++;
-    if (index == questions.size()) {
+    int firstUnclosedIndex = findFirstUnclosedIndex(questions);
+    if (firstUnclosedIndex == questions.size()) {
       resumeAfterFeedback(snapshot, questions.getLast(), () -> core.finishQuiz(snapshot.roomId(), snapshot.runId()));
       return;
     }
 
-    Question current = questions.get(index);
-    if (questions.subList(index + 1, questions.size()).stream()
+    Question firstUnclosed = questions.get(firstUnclosedIndex);
+    if (questions.subList(firstUnclosedIndex + 1, questions.size()).stream()
         .anyMatch(question -> question.status() != RunQuestionStatus.READY)) {
       throw new IllegalStateException("Running quiz has inconsistent question order");
     }
-    if (current.status() == RunQuestionStatus.OPEN) {
-      // 정상 진행과 동일하게 closesAt + 1초까지 답안을 받는다.
-      Instant closeAt = Objects.requireNonNull(current.closesAt(), "Open question needs closesAt").plusSeconds(1);
-      resume(snapshot.roomId(), closeAt, () -> core.closeQuestion(snapshot.roomId(), current.id()));
+    if (firstUnclosed.status() == RunQuestionStatus.OPEN) {
+      resumeOpenQuestion(snapshot.roomId(), firstUnclosed);
       return;
     }
-    if (index == 0) throw new IllegalStateException("Running quiz has no opened or closed question");
+    if (firstUnclosedIndex == 0) throw new IllegalStateException("Running quiz has no opened or closed question");
 
-    resumeAfterFeedback(snapshot, questions.get(index - 1),
-        () -> core.openQuestion(snapshot.roomId(), snapshot.runId(), current.orderNo()));
+    resumeAfterFeedback(snapshot, questions.get(firstUnclosedIndex - 1),
+        () -> core.openQuestion(snapshot.roomId(), snapshot.runId(), firstUnclosed.orderNo()));
+  }
+
+  private int findFirstUnclosedIndex(List<Question> questions) {
+    for (int index = 0; index < questions.size(); index++) {
+      if (questions.get(index).status() != RunQuestionStatus.CLOSED) return index;
+    }
+    return questions.size();
+  }
+
+  private void resumeOpenQuestion(Long roomId, Question question) {
+    if (question.closesAt() == null) throw new IllegalStateException("Open question needs closesAt");
+
+    // 정상 진행과 동일하게 closesAt + 1초까지 답안을 받는다.
+    Instant closeAt = question.closesAt().plusSeconds(1);
+    resume(roomId, closeAt, () -> core.closeQuestion(roomId, question.id()));
   }
 
   private void resumeAfterFeedback(Snapshot snapshot, Question closed, Runnable action) {
-    Instant closedAt = Objects.requireNonNull(closed.closedAt(), "Closed question needs closedAt");
+    if (closed.closedAt() == null) throw new IllegalStateException("Closed question needs closedAt");
+
     Instant opensAt = feedback.nextOpensAt(snapshot.roomId(), snapshot.runId(), closed.id())
-        .orElseGet(() -> closedAt.plusSeconds(3));
+        .orElseGet(() -> closed.closedAt().plusSeconds(3));
     resume(snapshot.roomId(), opensAt, action);
   }
 
