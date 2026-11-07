@@ -10,6 +10,7 @@ import com.sahmhoot.room.exception.RoomException;
 import com.sahmhoot.room.repository.RoomParticipantRepository;
 import com.sahmhoot.room.repository.RoomRepository;
 import com.sahmhoot.room.service.RoomPresenceService;
+import com.sahmhoot.room.service.RoomPresenceService.CountChange;
 import com.sahmhoot.websocket.presence.RoomPresencePort;
 import com.sahmhoot.websocket.presence.RoomPresenceSnapshot;
 import java.time.Instant;
@@ -18,25 +19,19 @@ import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.test.util.ReflectionTestUtils;
 
 class RoomPresenceServiceTest {
   private final RoomRepository rooms = mock(RoomRepository.class);
   private final RoomParticipantRepository participants = mock(RoomParticipantRepository.class);
-  @SuppressWarnings("unchecked")
-  private final ObjectProvider<RoomPresencePort> sources = mock(ObjectProvider.class);
   private final RoomPresencePort source = mock(RoomPresencePort.class);
-  private final RoomPresenceService service = new RoomPresenceService(rooms, participants, sources);
+  private final RoomPresenceService service = new RoomPresenceService(rooms, participants, source);
   private Room room;
 
   @BeforeEach void setup() {
     room = new Room(1L, "수업", "123456");
     ReflectionTestUtils.setField(room, "id", 42L);
     when(rooms.findById(42L)).thenReturn(Optional.of(room));
-    when(sources.getObject()).thenReturn(source);
-    when(sources.getIfAvailable()).thenReturn(source);
   }
 
   @Test void countsUsersOnceExcludesOwnerAndReturnsParticipantIdsRatherThanUserIds() {
@@ -71,14 +66,6 @@ class RoomPresenceServiceTest {
     verifyNoInteractions(source, participants);
   }
 
-  @Test void absentProviderKeepsLegacyRestPlaceholderButNeverFakesQuizParticipants() {
-    when(sources.getIfAvailable()).thenReturn(null);
-    when(sources.getObject()).thenThrow(new NoSuchBeanDefinitionException(RoomPresencePort.class));
-    assertThat(service.onlineCount(room)).isZero();
-    assertThatThrownBy(() -> service.getOnlineParticipantIds(42L))
-        .isInstanceOf(NoSuchBeanDefinitionException.class);
-  }
-
   @Test void invalidProviderDataIsRejectedRatherThanCountedAsZero() {
     when(source.getPresence(42L)).thenReturn(null);
     assertThatThrownBy(() -> service.getOnlineParticipantIds(42L)).isInstanceOf(NullPointerException.class);
@@ -88,8 +75,35 @@ class RoomPresenceServiceTest {
 
   @Test void closedRoomDropsPendingPublication() {
     room.close(Instant.now());
-    assertThat(service.countChange(new RoomPresenceSnapshot(42L, Set.of(), false))).isEmpty();
+    assertThat(service.countChange(new RoomPresenceSnapshot(42L, Set.of(), false), null)).isEmpty();
     verifyNoInteractions(source);
+  }
+
+  @Test void initialChangeReadsPreviousAndCurrentMembersInOneQuery() {
+    var previous = new RoomPresenceSnapshot(42L, Set.of(1L, 2L), true);
+    when(source.getPresence(42L)).thenReturn(new RoomPresenceSnapshot(42L, Set.of(1L, 3L, 4L), true));
+    when(participants.findByRoomIdAndUserIdInAndLeftAtIsNull(42L, Set.of(1L, 2L, 3L, 4L)))
+        .thenReturn(List.of(member(100L, 1L), member(200L, 2L), member(300L, 3L), member(400L, 4L)));
+    assertThat(service.countChange(previous, null)).contains(new CountChange(1, 2));
+    verify(participants, times(1)).findByRoomIdAndUserIdInAndLeftAtIsNull(anyLong(), anySet());
+  }
+
+  @Test void knownCountSkipsPreviousMembersAndQueriesOnlyCurrentUsers() {
+    var previous = new RoomPresenceSnapshot(42L, Set.of(2L), false);
+    when(source.getPresence(42L)).thenReturn(new RoomPresenceSnapshot(42L, Set.of(3L), false));
+    when(participants.findByRoomIdAndUserIdInAndLeftAtIsNull(42L, Set.of(3L)))
+        .thenReturn(List.of(member(300L, 3L)));
+    assertThat(service.countChange(previous, 7)).contains(new CountChange(7, 1));
+    verify(participants).findByRoomIdAndUserIdInAndLeftAtIsNull(42L, Set.of(3L));
+    verifyNoMoreInteractions(participants);
+  }
+
+  @Test void emptyOrOwnerOnlyRoomListNeedsNoParticipantQuery() {
+    assertThat(service.onlineCounts(List.of())).isEmpty();
+    verifyNoInteractions(source, participants);
+    when(source.getPresence(42L)).thenReturn(new RoomPresenceSnapshot(42L, Set.of(1L), true));
+    assertThat(service.onlineCounts(List.of(room))).containsEntry(42L, 0);
+    verifyNoInteractions(participants);
   }
 
   private RoomParticipant member(Long id, Long userId) {

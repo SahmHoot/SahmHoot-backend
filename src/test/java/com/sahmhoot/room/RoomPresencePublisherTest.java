@@ -47,7 +47,7 @@ class RoomPresencePublisherTest {
   @Test void burstPublishesLatestFullCountOnceAfterOneSecond() {
     publisher.changed(event(Set.of(), Set.of(2L)));
     publisher.changed(event(Set.of(2L), Set.of(2L, 3L)));
-    when(presence.countChange(any())).thenReturn(Optional.of(new CountChange(0, 2)));
+    when(presence.countChange(any(), nullable(Integer.class))).thenReturn(Optional.of(new CountChange(0, 2)));
     assertThat(tasks).hasSize(1);
     assertThat(tasks.getFirst().at()).isEqualTo(T0.plusSeconds(1));
     verifyNoInteractions(messaging, presence);
@@ -61,13 +61,13 @@ class RoomPresencePublisherTest {
   @Test void unchangedCountAndJoinLeaveBurstDoNotPublish() {
     publisher.changed(event(Set.of(), Set.of(2L)));
     publisher.changed(event(Set.of(2L), Set.of()));
-    when(presence.countChange(any())).thenReturn(Optional.of(new CountChange(0, 0)));
+    when(presence.countChange(any(), nullable(Integer.class))).thenReturn(Optional.of(new CountChange(0, 0)));
     runNext();
     verifyNoInteractions(messaging);
   }
 
   @Test void differentRoomsHaveIndependentPublicationWindows() {
-    when(presence.countChange(any())).thenReturn(Optional.of(new CountChange(0, 1)));
+    when(presence.countChange(any(), nullable(Integer.class))).thenReturn(Optional.of(new CountChange(0, 1)));
     publisher.changed(event(Set.of(), Set.of(2L)));
     publisher.changed(new RoomPresenceChangedEvent(new RoomPresenceSnapshot(43L, Set.of(), false),
         new RoomPresenceSnapshot(43L, Set.of(3L), false), T0));
@@ -79,7 +79,7 @@ class RoomPresencePublisherTest {
   }
 
   @Test void changeDuringPublicationWaitsAnotherSecondAndSendsLatestValue() {
-    when(presence.countChange(any())).thenReturn(Optional.of(new CountChange(0, 1)), Optional.of(new CountChange(1, 2)));
+    when(presence.countChange(any(), nullable(Integer.class))).thenReturn(Optional.of(new CountChange(0, 1)), Optional.of(new CountChange(1, 2)));
     doAnswer(call -> {
       assertThat(locks.isLocked(42L)).isTrue();
       if (((OnlineCountMessage) call.getArgument(1)).onlineCount() == 1) {
@@ -106,21 +106,37 @@ class RoomPresencePublisherTest {
     publisher.changed(event(Set.of(), Set.of(3L)));
     old.action().run();
     verifyNoInteractions(presence, messaging);
-    when(presence.countChange(any())).thenReturn(Optional.of(new CountChange(0, 1)));
+    when(presence.countChange(any(), nullable(Integer.class))).thenReturn(Optional.of(new CountChange(0, 1)));
     runNext();
     verify(messaging).convertAndSend(anyString(), any(OnlineCountMessage.class));
   }
 
   @Test void closedRoomDropsReservationWithoutSending() {
-    when(presence.countChange(any())).thenReturn(Optional.empty());
+    when(presence.countChange(any(), nullable(Integer.class))).thenReturn(Optional.empty());
     publisher.changed(event(Set.of(), Set.of(2L)));
     runNext();
     verifyNoInteractions(messaging);
     assertThat(tasks).isEmpty();
   }
 
+  @Test void schedulerFailureDoesNotEscapeIntoSessionTrackerAndNextEventCanScheduleAgain() {
+    doThrow(new java.util.concurrent.RejectedExecutionException("예약 실패"))
+        .when(scheduler).schedule(any(), any());
+    assertThatCode(() -> publisher.changed(event(Set.of(), Set.of(2L)))).doesNotThrowAnyException();
+    verifyNoInteractions(presence, messaging);
+    doAnswer(call -> {
+      ScheduledFuture<?> future = mock(ScheduledFuture.class);
+      tasks.add(new Task(call.getArgument(0), call.getArgument(1), future));
+      return future;
+    }).when(scheduler).schedule(any(), any());
+    when(presence.countChange(any(), nullable(Integer.class))).thenReturn(Optional.of(new CountChange(1, 2)));
+    publisher.changed(event(Set.of(2L), Set.of(2L, 3L)));
+    runNext();
+    verify(messaging).convertAndSend(eq("/topic/rooms/42/presence"), any(OnlineCountMessage.class));
+  }
+
   @Test void failedSendDoesNotPreventSubsequentChanges() {
-    when(presence.countChange(any())).thenReturn(Optional.of(new CountChange(0, 1)), Optional.of(new CountChange(1, 2)));
+    when(presence.countChange(any(), nullable(Integer.class))).thenReturn(Optional.of(new CountChange(0, 1)), Optional.of(new CountChange(1, 2)));
     doThrow(new IllegalStateException("전송 실패")).doNothing()
         .when(messaging).convertAndSend(anyString(), any(OnlineCountMessage.class));
     publisher.changed(event(Set.of(), Set.of(2L)));
@@ -128,6 +144,62 @@ class RoomPresencePublisherTest {
     publisher.changed(event(Set.of(2L), Set.of(2L, 3L)));
     runNext();
     verify(messaging, times(2)).convertAndSend(anyString(), any(OnlineCountMessage.class));
+    assertThat(tasks).isEmpty();
+  }
+
+  @Test void failedSendRetriesLatestFullCountWithoutAnotherEvent() {
+    when(presence.countChange(any(), nullable(Integer.class)))
+        .thenReturn(Optional.of(new CountChange(0, 1)), Optional.of(new CountChange(0, 2)));
+    doThrow(new IllegalStateException("전송 실패")).doNothing()
+        .when(messaging).convertAndSend(anyString(), any(OnlineCountMessage.class));
+    publisher.changed(event(Set.of(), Set.of(2L)));
+    runNext();
+    assertThat(tasks).singleElement().extracting(Task::at).isEqualTo(T0.plusSeconds(2));
+    runNext(); // 새 이벤트 없이 포트의 최신 값을 읽는다.
+    var sent = ArgumentCaptor.forClass(OnlineCountMessage.class);
+    verify(messaging, times(2)).convertAndSend(eq("/topic/rooms/42/presence"), sent.capture());
+    assertThat(sent.getAllValues()).extracting(OnlineCountMessage::onlineCount).containsExactly(1, 2);
+    assertThat(sent.getAllValues()).extracting(OnlineCountMessage::sentAt)
+        .containsExactly(T0.plusSeconds(1), T0.plusSeconds(2));
+    verify(presence).countChange(any(), eq(0));
+    assertThat(tasks).isEmpty();
+  }
+
+  @Test void readFailureRetriesAutomaticallyAndStopsAfterRecovery() {
+    when(presence.countChange(any(), nullable(Integer.class)))
+        .thenThrow(new IllegalStateException("조회 실패"))
+        .thenReturn(Optional.of(new CountChange(0, 1)));
+    publisher.changed(event(Set.of(), Set.of(2L)));
+    runNext();
+    verifyNoInteractions(messaging);
+    assertThat(tasks).hasSize(1);
+    runNext();
+    verify(messaging).convertAndSend(eq("/topic/rooms/42/presence"), eq(OnlineCountMessage.of(T0.plusSeconds(2), 1)));
+    assertThat(tasks).isEmpty();
+  }
+
+  @Test void failedAttemptMayHaveBeenDeliveredSoRetryAlsoPublishesWhenCountReturnsToBaseline() {
+    when(presence.countChange(any(), nullable(Integer.class)))
+        .thenReturn(Optional.of(new CountChange(0, 1)), Optional.of(new CountChange(0, 0)));
+    doThrow(new IllegalStateException("전송 결과 불명")).doNothing()
+        .when(messaging).convertAndSend(anyString(), any(OnlineCountMessage.class));
+    publisher.changed(event(Set.of(), Set.of(2L)));
+    runNext();
+    runNext();
+    verify(messaging).convertAndSend(eq("/topic/rooms/42/presence"), eq(OnlineCountMessage.of(T0.plusSeconds(2), 0)));
+    assertThat(tasks).isEmpty();
+  }
+
+  @Test void cancellationAfterFailureStopsRetryAndLateCallbackCannotPublish() {
+    when(presence.countChange(any(), nullable(Integer.class))).thenThrow(new IllegalStateException("조회 실패"));
+    publisher.changed(event(Set.of(), Set.of(2L)));
+    runNext();
+    Task retry = tasks.removeFirst();
+    publisher.cancelAll(42L);
+    verify(retry.future()).cancel(false);
+    retry.action().run();
+    verify(presence, times(1)).countChange(any(), nullable(Integer.class));
+    verifyNoInteractions(messaging);
   }
 
   private void runNext() {

@@ -1,6 +1,6 @@
 package com.sahmhoot.room.service;
 
-import com.sahmhoot.quiz.lock.RoomLockManager;
+import com.sahmhoot.quiz.service.port.RoomLockPort;
 import com.sahmhoot.room.dto.RoomSummaryResponse;
 import com.sahmhoot.room.dto.message.RoomEndedMessage;
 import com.sahmhoot.room.entity.Room;
@@ -28,13 +28,13 @@ public class RoomManagementService {
   private final RoomRepository rooms;
   private final RoomUserLookup users;
   private final RoomPresenceService presence;
-  private final RoomLockManager locks;
+  private final RoomLockPort locks;
   private final RoomQuizAbortPort quizzes;
   private final ObjectProvider<RoomTaskCanceller> cancellers;
   private final SimpMessagingTemplate messaging;
   private final TransactionTemplate closing;
 
-  public RoomManagementService(RoomRepository rooms, RoomUserLookup users, RoomLockManager locks,
+  public RoomManagementService(RoomRepository rooms, RoomUserLookup users, RoomLockPort locks,
       RoomQuizAbortPort quizzes, ObjectProvider<RoomTaskCanceller> cancellers,
       SimpMessagingTemplate messaging, PlatformTransactionManager transactions, RoomPresenceService presence) {
     this.rooms = rooms;
@@ -52,8 +52,9 @@ public class RoomManagementService {
   public List<RoomSummaryResponse> mine(Long userId) {
     var user = users.findById(userId).orElseThrow(() -> new RoomException(RoomErrorCode.UNAUTHORIZED));
     if (!"PROFESSOR".equals(user.role())) throw new RoomException(RoomErrorCode.FORBIDDEN);
-    return rooms.findByHostIdAndStatusNotOrderByCreatedAtDescIdDesc(userId, RoomStatus.CLOSED)
-        .stream().map(room -> RoomSummaryResponse.from(room, presence.onlineCount(room))).toList();
+    var roomList = rooms.findByHostIdAndStatusNotOrderByCreatedAtDescIdDesc(userId, RoomStatus.CLOSED);
+    var counts = presence.onlineCounts(roomList);
+    return roomList.stream().map(room -> RoomSummaryResponse.from(room, counts.get(room.getId()))).toList();
   }
 
   @Transactional(propagation = Propagation.NOT_SUPPORTED)

@@ -14,4 +14,6 @@ public interface RoomParticipantRepository extends JpaRepository<RoomParticipant
   boolean existsByRoomIdAndNickname(Long roomId, String nickname);
 
   List<RoomParticipant> findByRoomIdAndUserIdInAndLeftAtIsNull(Long roomId, Set<Long> userIds);
+
+  List<RoomParticipant> findByRoomIdInAndUserIdInAndLeftAtIsNull(Set<Long> roomIds, Set<Long> userIds);
 }

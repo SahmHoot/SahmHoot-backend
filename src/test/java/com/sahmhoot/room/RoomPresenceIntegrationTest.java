@@ -9,6 +9,7 @@ import com.sahmhoot.auth.jwt.JwtProvider;
 import com.sahmhoot.quiz.lock.RoomLockManager;
 import com.sahmhoot.quiz.service.port.ParticipantPresencePort;
 import com.sahmhoot.room.dto.CreateRoomRequest;
+import com.sahmhoot.room.dto.RoomSummaryResponse;
 import com.sahmhoot.room.dto.message.OnlineCountMessage;
 import com.sahmhoot.room.entity.RoomParticipant;
 import com.sahmhoot.room.exception.RoomErrorCode;
@@ -39,6 +40,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -51,7 +53,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 class RoomPresenceIntegrationTest {
   @Autowired RoomService creation;
   @Autowired RoomManagementService management;
-  @Autowired RoomParticipantRepository participants;
+  @MockitoSpyBean RoomParticipantRepository participants;
   @Autowired ParticipantPresencePort presence;
   @Autowired UserRepository users;
   @Autowired JdbcTemplate jdbc;
@@ -136,6 +138,29 @@ class RoomPresenceIntegrationTest {
     }).when(messaging).convertAndSend(eq(topic()), any(OnlineCountMessage.class));
     tasks.removeFirst().action().run();
     verify(messaging).convertAndSend(eq(topic()), any(OnlineCountMessage.class));
+  }
+
+  @Test void mineBatchesRoomsAndDoesNotCountUsersConnectedOnlyToAnotherRoom() {
+    Long otherRoom = creation.create(owner.getId(), new CreateRoomRequest("다른 수업")).id();
+    try {
+      participants.saveAndFlush(new RoomParticipant(otherRoom, student.getId(), "다른방학생"));
+      participants.saveAndFlush(new RoomParticipant(otherRoom, otherProfessor.getId(), "다른교수"));
+      Long leftId = participants.saveAndFlush(new RoomParticipant(otherRoom, left.getId(), "퇴장학생")).getId();
+      jdbc.update("UPDATE room_participants SET left_at = UTC_TIMESTAMP() WHERE id = ?", leftId);
+      current.set(snapshot(Set.of(owner.getId(), student.getId())));
+      when(source.getPresence(otherRoom)).thenReturn(new RoomPresenceSnapshot(otherRoom,
+          Set.of(owner.getId(), otherProfessor.getId(), left.getId(), outsider.getId()), true));
+
+      var mine = management.mine(owner.getId());
+      assertThat(mine).extracting(RoomSummaryResponse::id).containsExactly(otherRoom, roomId);
+      assertThat(mine).extracting(RoomSummaryResponse::onlineCount).containsExactly(1, 1);
+      verify(participants, times(1)).findByRoomIdInAndUserIdInAndLeftAtIsNull(eq(Set.of(roomId, otherRoom)), anySet());
+      verify(participants, never()).findByRoomIdAndUserIdInAndLeftAtIsNull(anyLong(), anySet());
+    } finally {
+      management.close(otherRoom, owner.getId());
+      jdbc.update("DELETE FROM room_participants WHERE room_id = ?", otherRoom);
+      jdbc.update("DELETE FROM rooms WHERE id = ?", otherRoom);
+    }
   }
 
   @Test void ownerOnlyConnectionChangeDoesNotPublishStudentCount() {
