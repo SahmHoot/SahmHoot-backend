@@ -226,6 +226,17 @@ class QuizRecoveryServiceTest {
     verifyNoInteractions(core);
   }
 
+  @Test
+  @DisplayName("실제 마감 시각이 없는 문항은 피드백을 건너뛰거나 다음 문항을 열지 않는다")
+  void rejectsMissingClosedAt() {
+    givenRunning(closed(810L, 1, null), ready(811L, 2));
+
+    recovery.recoverRunningQuizzes();
+
+    assertThat(scheduler.pendingCount()).isZero();
+    verifyNoInteractions(core);
+  }
+
   private void givenRunning(Question... questions) {
     given(reader.findRunningQuizzes()).willReturn(List.of(RUN));
     given(reader.read(RUN)).willAnswer(invocation -> {
