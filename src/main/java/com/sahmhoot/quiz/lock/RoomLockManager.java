@@ -1,5 +1,6 @@
 package com.sahmhoot.quiz.lock;
 
+import com.sahmhoot.quiz.service.port.RoomLockPort;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 import org.springframework.stereotype.Component;
@@ -13,7 +14,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * - 새 작업은 트랜잭션보다 먼저 잠금을 획득한다. 이미 잡은 같은 잠금 안에서의 재진입은 허용한다.
  */
 @Component
-public class RoomLockManager {
+public class RoomLockManager implements RoomLockPort {
 
   private static final int STRIPE_COUNT = 64;
   private final ReentrantLock[] locks = new ReentrantLock[STRIPE_COUNT];
@@ -35,6 +36,7 @@ public class RoomLockManager {
   /**
    * 지정된 방의 락을 획득한 후 작업을 실행하고 반환값을 리턴한다.
    */
+  @Override
   public <T> T executeWithLock(Long roomId, Supplier<T> task) {
     ReentrantLock lock = getLock(roomId);
     requireLockBeforeTransaction(lock);
@@ -49,6 +51,7 @@ public class RoomLockManager {
   /**
    * 지정된 방의 락을 획득한 후 반환값이 없는 작업을 실행한다.
    */
+  @Override
   public void executeWithLock(Long roomId, Runnable task) {
     ReentrantLock lock = getLock(roomId);
     requireLockBeforeTransaction(lock);

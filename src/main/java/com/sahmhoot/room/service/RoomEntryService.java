@@ -1,7 +1,7 @@
 package com.sahmhoot.room.service;
 
 import com.sahmhoot.common.ratelimit.RateLimiter;
-import com.sahmhoot.quiz.lock.RoomLockManager;
+import com.sahmhoot.quiz.service.port.RoomLockPort;
 import com.sahmhoot.room.dto.JoinRoomRequest;
 import com.sahmhoot.room.dto.JoinRoomResponse;
 import com.sahmhoot.room.dto.RoomByCodeResponse;
@@ -29,11 +29,11 @@ public class RoomEntryService {
   private final RoomParticipantRepository participants;
   private final RoomUserLookup users;
   private final RateLimiter limiter;
-  private final RoomLockManager locks;
+  private final RoomLockPort locks;
   private final TransactionTemplate joining;
 
   public RoomEntryService(RoomRepository rooms, RoomParticipantRepository participants,
-      RoomUserLookup users, RateLimiter limiter, RoomLockManager locks,
+      RoomUserLookup users, RateLimiter limiter, RoomLockPort locks,
       PlatformTransactionManager transactions) {
     this.rooms = rooms;
     this.participants = participants;

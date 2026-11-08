@@ -1,6 +1,6 @@
 package com.sahmhoot.room.service;
 
-import com.sahmhoot.quiz.lock.RoomLockManager;
+import com.sahmhoot.quiz.service.port.RoomLockPort;
 import com.sahmhoot.room.dto.RoomStateResponse;
 import com.sahmhoot.room.dto.RoomStateResponse.*;
 import com.sahmhoot.room.entity.Room;
@@ -29,15 +29,16 @@ public class RoomStateService {
   private final RoomRepository rooms;
   private final RoomParticipantRepository participants;
   private final RoomUserLookup users;
-  private final RoomLockManager locks;
+  private final RoomLockPort locks;
   private final RoomQuizStatePort quizzes;
   private final Clock clock;
+  private final RoomPresenceService presence;
   private final String joinBaseUrl;
   private final TransactionTemplate reading;
 
   public RoomStateService(RoomRepository rooms, RoomParticipantRepository participants,
-      RoomUserLookup users, RoomLockManager locks, RoomQuizStatePort quizzes,
-      Clock clock, PlatformTransactionManager transactions,
+      RoomUserLookup users, RoomLockPort locks, RoomQuizStatePort quizzes,
+      Clock clock, RoomPresenceService presence, PlatformTransactionManager transactions,
       @Value("${app.room.join-base-url:http://localhost:5173}") String joinBaseUrl) {
     this.rooms = rooms;
     this.participants = participants;
@@ -45,6 +46,7 @@ public class RoomStateService {
     this.locks = locks;
     this.quizzes = quizzes;
     this.clock = clock;
+    this.presence = presence;
     this.joinBaseUrl = joinBaseUrl.replaceAll("/+$", "");
     reading = new TransactionTemplate(transactions);
     reading.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -82,10 +84,11 @@ public class RoomStateService {
     }
     String joinUrl = UriComponentsBuilder.fromUriString(joinBaseUrl)
         .pathSegment("join", room.getCode()).build().toUriString();
-    // #45 접속 인원, 채팅·반응 모듈 연동 전의 빈 값. 참여 기록 수를 접속 인원으로 쓰지 않는다.
+    int onlineCount = presence.onlineCount(room);
+    // 채팅·반응 모듈 연동 전의 빈 값. 접속 인원은 참여 기록 수와 구분한다.
     return new RoomStateResponse(Instant.now(clock), new RoomDetail(roomId, room.getTitle(),
         room.getStatus(), room.getCode(), joinUrl, ownerName), snapshot.quizRun(),
-        new Me(participant.getId(), participant.getNickname(), owner, false), 0, quiz,
+        new Me(participant.getId(), participant.getNickname(), owner, false), onlineCount, quiz,
         null, List.of(), progress, owner ? Map.of() : null);
   }
 

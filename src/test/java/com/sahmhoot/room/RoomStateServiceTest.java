@@ -12,6 +12,7 @@ import com.sahmhoot.room.exception.RoomException;
 import com.sahmhoot.room.repository.RoomParticipantRepository;
 import com.sahmhoot.room.repository.RoomRepository;
 import com.sahmhoot.room.service.RoomStateService;
+import com.sahmhoot.room.service.RoomPresenceService;
 import com.sahmhoot.room.service.RoomUserLookup;
 import com.sahmhoot.room.service.port.RoomQuizStatePort;
 import java.time.Clock;
@@ -19,6 +20,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -35,9 +37,10 @@ class RoomStateServiceTest {
   private final RoomUserLookup users = mock(RoomUserLookup.class);
   private final RoomLockManager locks = new RoomLockManager();
   private final RoomQuizStatePort quizzes = mock(RoomQuizStatePort.class);
+  private final RoomPresenceService presence = mock(RoomPresenceService.class);
   private final PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
   private final RoomStateService service = new RoomStateService(rooms, participants, users, locks,
-      quizzes, Clock.fixed(NOW, ZoneOffset.UTC), transactions, "https://class.example/");
+      quizzes, Clock.fixed(NOW, ZoneOffset.UTC), presence, transactions, "https://class.example/");
   private Room room;
 
   @BeforeEach void setup() {
@@ -72,6 +75,21 @@ class RoomStateServiceTest {
     verify(quizzes).read(42L, 200L);
     verify(transactions).commit(any());
     assertThat(locks.isLocked(42L)).isFalse();
+  }
+
+  @Test void snapshotTimeIncludesPresenceReadSoBufferedCountsCanBeComparedCorrectly() {
+    var now = new AtomicReference<>(NOW);
+    var clock = mock(Clock.class);
+    when(clock.instant()).thenAnswer(call -> now.get());
+    when(presence.onlineCount(room)).thenAnswer(call -> {
+      now.set(NOW.plusSeconds(2));
+      return 3;
+    });
+    var reader = new RoomStateService(rooms, participants, users, locks, quizzes, clock,
+        presence, transactions, "https://class.example");
+    var response = reader.state(42L, 2L);
+    assertThat(response.onlineCount()).isEqualTo(3);
+    assertThat(response.serverTime()).isEqualTo(NOW.plusSeconds(2));
   }
 
   @Test void ownershipUsesRoomHostRatherThanAccountRole() {
