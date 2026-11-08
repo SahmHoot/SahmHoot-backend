@@ -11,6 +11,7 @@ import com.sahmhoot.room.repository.RoomRepository;
 import com.sahmhoot.room.service.port.RoomQuizAbortPort;
 import com.sahmhoot.room.service.port.RoomTaskCanceller;
 import java.time.Instant;
+import java.time.Clock;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -33,13 +34,15 @@ public class RoomManagementService {
   private final ObjectProvider<RoomTaskCanceller> cancellers;
   private final SimpMessagingTemplate messaging;
   private final TransactionTemplate closing;
+  private final Clock clock;
 
   public RoomManagementService(RoomRepository rooms, RoomUserLookup users, RoomLockPort locks,
       RoomQuizAbortPort quizzes, ObjectProvider<RoomTaskCanceller> cancellers,
-      SimpMessagingTemplate messaging, PlatformTransactionManager transactions, RoomPresenceService presence) {
+      SimpMessagingTemplate messaging, PlatformTransactionManager transactions, RoomPresenceService presence, Clock clock) {
     this.rooms = rooms;
     this.users = users;
     this.presence = presence;
+    this.clock = clock;
     this.locks = locks;
     this.quizzes = quizzes;
     this.cancellers = cancellers;
@@ -65,7 +68,7 @@ public class RoomManagementService {
         if (!room.getHostId().equals(userId)) throw new RoomException(RoomErrorCode.FORBIDDEN);
         if (room.getStatus() == RoomStatus.CLOSED) return false;
         quizzes.abortActiveQuiz(roomId);
-        room.close(Instant.now());
+        room.close(Instant.now(clock));
         rooms.saveAndFlush(room);
         return true;
       });
@@ -80,7 +83,7 @@ public class RoomManagementService {
         }
       });
       try {
-        messaging.convertAndSend("/topic/rooms/" + roomId + "/quiz", RoomEndedMessage.now());
+        messaging.convertAndSend("/topic/rooms/" + roomId + "/quiz", RoomEndedMessage.at(clock.instant()));
       } catch (RuntimeException error) {
         log.error("Room ended notification failed: roomId={}", roomId, error);
       }
