@@ -18,6 +18,8 @@ import com.sahmhoot.questionset.service.QuestionSetService;
 import com.sahmhoot.quiz.dto.StartQuizRequest;
 import com.sahmhoot.quiz.dto.StartQuizResponse;
 import com.sahmhoot.quiz.dto.SubmitAnswerRequest;
+import com.sahmhoot.quiz.schedule.AnswerTaskScheduler;
+import com.sahmhoot.room.service.RoomPresenceService;
 import com.sahmhoot.quiz.dto.message.QuestionClosedMessage;
 import com.sahmhoot.quiz.lock.RoomLockManager;
 import com.sahmhoot.quiz.repository.RunChoiceRepository;
@@ -35,7 +37,6 @@ import com.sahmhoot.user.User;
 import com.sahmhoot.user.UserRepository;
 import java.time.Instant;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.*;
 import org.mockito.ArgumentCaptor;
@@ -69,6 +70,9 @@ class RoomQuizStateIntegrationTest {
       return new ManualQuizTaskScheduler(clock);
     }
   }
+
+  @MockitoBean RoomPresenceService presence;
+  @MockitoBean AnswerTaskScheduler answerTasks;
 
   @Autowired MutableClock clock;
   @Autowired ManualQuizTaskScheduler scheduler;
@@ -139,9 +143,9 @@ class RoomQuizStateIntegrationTest {
     var currentChoices = choices.findByRunQuestionIdOrderByOrderNoAsc(started.firstRunQuestionId());
     Long correct = currentChoices.get(0).getId();
     Long wrong = currentChoices.get(1).getId();
-    answers.submitAnswer(roomId, participantId, new SubmitAnswerRequest(started.firstRunQuestionId(), correct), Set.of());
-    answers.submitAnswer(roomId, participantId, new SubmitAnswerRequest(started.firstRunQuestionId(), wrong), Set.of());
-    answers.submitAnswer(roomId, otherParticipantId, new SubmitAnswerRequest(started.firstRunQuestionId(), correct), Set.of());
+    answers.submitAnswer(roomId, participantId, new SubmitAnswerRequest(started.firstRunQuestionId(), correct));
+    answers.submitAnswer(roomId, participantId, new SubmitAnswerRequest(started.firstRunQuestionId(), wrong));
+    answers.submitAnswer(roomId, otherParticipantId, new SubmitAnswerRequest(started.firstRunQuestionId(), correct));
     state(student).andExpect(jsonPath("$.quiz.phase").value("QUESTION"))
         .andExpect(jsonPath("$.quiz.questionSetTitle").value("스택과 큐"))
         .andExpect(jsonPath("$.quiz.currentQuestion.correctChoiceId").value(nullValue()))

@@ -147,7 +147,7 @@ class RoomOwnerTimeoutIntegrationTest {
         List.of(new ChoiceRequest("정답", true), new ChoiceRequest("오답", false))));
     var quiz = quizzes.startQuiz(roomId, new StartQuizRequest(setId), owner.getId());
     var choice = choices.findByRunQuestionIdOrderByOrderNoAsc(quiz.firstRunQuestionId()).getFirst();
-    answers.submitAnswer(roomId, participantId, new SubmitAnswerRequest(quiz.firstRunQuestionId(), choice.getId()), Set.of());
+    answers.submitAnswer(roomId, participantId, new SubmitAnswerRequest(quiz.firstRunQuestionId(), choice.getId()));
     clearInvocations(messaging);
     changeOwner(false);
     advanceTo(T0.plusSeconds(1799));

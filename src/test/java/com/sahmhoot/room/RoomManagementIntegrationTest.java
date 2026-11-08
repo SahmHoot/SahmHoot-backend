@@ -271,7 +271,7 @@ class RoomManagementIntegrationTest {
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM answers WHERE run_question_id = ? AND run_choice_id = ?", Long.class, quiz.questionId(), quiz.choiceId())).isEqualTo(1);
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM room_participants WHERE room_id = ?", Long.class, id)).isEqualTo(2);
     assertThatThrownBy(() -> answers.submitAnswer(id, quiz.participantId(),
-        new SubmitAnswerRequest(quiz.questionId(), quiz.choiceId()), Set.of())).isInstanceOf(BusinessException.class);
+        new SubmitAnswerRequest(quiz.questionId(), quiz.choiceId()))).isInstanceOf(BusinessException.class);
     quizzes.closeQuestion(id, quiz.questionId());
     quizzes.openQuestion(id, quiz.runId(), 2);
     quizzes.finishQuiz(id, quiz.runId());

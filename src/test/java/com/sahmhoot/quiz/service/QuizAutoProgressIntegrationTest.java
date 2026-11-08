@@ -17,6 +17,8 @@ import com.sahmhoot.questionset.service.QuestionSetService;
 import com.sahmhoot.quiz.dto.StartQuizRequest;
 import com.sahmhoot.quiz.dto.StartQuizResponse;
 import com.sahmhoot.quiz.dto.SubmitAnswerRequest;
+import com.sahmhoot.quiz.schedule.AnswerTaskScheduler;
+import com.sahmhoot.room.service.RoomPresenceService;
 import com.sahmhoot.quiz.dto.message.QuestionClosedMessage;
 import com.sahmhoot.quiz.dto.message.QuestionOpenedMessage;
 import com.sahmhoot.quiz.dto.message.QuizFinishedMessage;
@@ -40,6 +42,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -89,6 +94,9 @@ class QuizAutoProgressIntegrationTest {
       return new ManualQuizTaskScheduler(testClock);
     }
   }
+
+  @MockitoBean RoomPresenceService presence;
+  @MockitoBean AnswerTaskScheduler answerTasks;
 
   @Autowired MutableClock clock;
   @Autowired ManualQuizTaskScheduler scheduler;
@@ -200,7 +208,7 @@ class QuizAutoProgressIntegrationTest {
     clock.setTo(T0.plusSeconds(12));
 
     assertThatThrownBy(() -> answerService.submitAnswer(roomId, participantId,
-        new SubmitAnswerRequest(started.firstRunQuestionId(), choiceId), Set.of(participantId)))
+        new SubmitAnswerRequest(started.firstRunQuestionId(), choiceId)))
         .isInstanceOf(BusinessException.class)
         .extracting(error -> ((BusinessException) error).getErrorCode())
         .isEqualTo(ErrorCode.QUESTION_CLOSED);
@@ -252,9 +260,10 @@ class QuizAutoProgressIntegrationTest {
     assertThat(scheduler.pendingTimes()).containsExactly(T0.plusSeconds(12));
 
     // 허용 끝 직전의 답은 받는다. 온라인 참여자를 한 명 더 두어 전원 응답 조기 마감은 일어나지 않게 한다.
+    org.mockito.Mockito.when(presence.getOnlineParticipantIds(roomId)).thenReturn(Set.of(participantId, -1L));
     clock.setTo(T0.plusMillis(11_900));
     answerService.submitAnswer(roomId, participantId,
-        new SubmitAnswerRequest(started.firstRunQuestionId(), choiceId), Set.of(participantId, -1L));
+        new SubmitAnswerRequest(started.firstRunQuestionId(), choiceId));
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM answers WHERE run_question_id = ?",
         Integer.class, started.firstRunQuestionId())).isOne();
 
@@ -430,6 +439,48 @@ class QuizAutoProgressIntegrationTest {
     scheduler.reset();
     jdbc.update("UPDATE run_questions SET status = 'CLOSED', closed_at = ? WHERE id = ?",
         Timestamp.from(closedAt), started.firstRunQuestionId());
+  }
+
+  @Test
+  @DisplayName("허용 마감 시각에 마지막 답과 마감 작업이 경합해도 QUESTION_CLOSED는 한 번만 발행된다 (#28)")
+  void lastAnswerRacingDeadlineClosesOnlyOnce() throws Exception {
+    var started = startQuiz(10, 20);
+    Long participantId = joinAsStudent();
+    Long choiceId = runChoices.findByRunQuestionIdOrderByOrderNoAsc(started.firstRunQuestionId()).getFirst().getId();
+    org.mockito.Mockito.when(presence.getOnlineParticipantIds(roomId)).thenReturn(Set.of(participantId));
+    clock.setTo(T0.plusSeconds(11));
+    var start = new CountDownLatch(1);
+    try (var workers = Executors.newFixedThreadPool(2)) {
+      var answer = workers.submit(() -> {
+        awaitRace(start);
+        try {
+          answerService.submitAnswer(roomId, participantId, new SubmitAnswerRequest(started.firstRunQuestionId(), choiceId));
+        } catch (BusinessException error) {
+          assertThat(error.getErrorCode()).isEqualTo(ErrorCode.QUESTION_CLOSED);
+        }
+      });
+      var timeout = workers.submit(() -> {
+        awaitRace(start);
+        quizCoreService.closeQuestion(roomId, started.firstRunQuestionId());
+      });
+      start.countDown();
+      answer.get(5, TimeUnit.SECONDS);
+      timeout.get(5, TimeUnit.SECONDS);
+    }
+    assertThat(runQuestions.findById(started.firstRunQuestionId()).orElseThrow().isClosed()).isTrue();
+    assertThat(sentMessageTypes()).filteredOn(QuestionClosedMessage.class::equals).hasSize(1);
+    assertThat(scheduler.pendingTimes()).containsExactly(T0.plusSeconds(11), T0.plusSeconds(14));
+    scheduler.runNext(); // 원래 마감 예약도 중복 마감·예약을 만들지 않는다.
+    assertThat(scheduler.pendingTimes()).containsExactly(T0.plusSeconds(14));
+  }
+
+  private void awaitRace(CountDownLatch start) {
+    try {
+      if (!start.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Race did not start");
+    } catch (InterruptedException error) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException(error);
+    }
   }
 
   /** 주어진 제한시간(초)의 객관식 문항들로 세트를 만들고 T0에 퀴즈를 시작한다. */
