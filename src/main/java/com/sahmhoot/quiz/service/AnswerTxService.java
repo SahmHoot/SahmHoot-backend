@@ -87,9 +87,13 @@ public class AnswerTxService {
       throw new BusinessException(ErrorCode.QUESTION_CLOSED);
     }
 
-    // 06 규격 5절: closed_at이 없고 서버 시각이 closes_at + 1초 이내여야 한다.
-    Instant lastAcceptedAt = question.getClosesAt() != null ? question.getClosesAt().plusSeconds(1) : now;
-    if (!question.isOpen() || question.getClosedAt() != null || now.isAfter(lastAcceptedAt)) {
+    if (!question.isOpen() || question.getClosedAt() != null || question.getClosesAt() == null) {
+      throw new BusinessException(ErrorCode.QUESTION_CLOSED);
+    }
+
+    // 06 규격 5절: 마감 예정 시각이 있는 문항만 closes_at + 1초까지 답을 받는다.
+    Instant lastAcceptedAt = question.getClosesAt().plusSeconds(1);
+    if (now.isAfter(lastAcceptedAt)) {
       throw new BusinessException(ErrorCode.QUESTION_CLOSED);
     }
   }
