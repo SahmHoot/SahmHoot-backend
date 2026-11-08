@@ -31,7 +31,7 @@ public class AnswerProgressPublisher implements RoomTaskCanceller {
   private final SimpMessagingTemplate messaging;
   private final Clock clock;
   private final Map<Long, Progress> progressByRoom = new ConcurrentHashMap<>();
-  private final Map<Long, Instant> lastSentByRoom = new ConcurrentHashMap<>();
+  private final Map<Long, Instant> lastAttemptByRoom = new ConcurrentHashMap<>();
   private volatile boolean stopping;
 
   /** 저장 트랜잭션이 커밋된 뒤 같은 방 잠금 안에서 호출한다. */
@@ -39,13 +39,13 @@ public class AnswerProgressPublisher implements RoomTaskCanceller {
     if (stopping) return;
     Progress progress = progressByRoom.compute(roomId, (id, current) ->
         current != null && current.questionId.equals(response.runQuestionId())
-            ? current : new Progress(ownerId, response.runQuestionId(), lastSentByRoom.get(roomId)));
+            ? current : new Progress(ownerId, response.runQuestionId(), lastAttemptByRoom.get(roomId)));
     if (progress.answeredCount == response.answeredCount()) return;
     progress.answeredCount = response.answeredCount();
     if (progress.future != null) return;
 
     Instant now = clock.instant();
-    if (progress.lastSentAt == null || !now.isBefore(progress.lastSentAt.plus(MIN_INTERVAL))) {
+    if (progress.lastAttemptAt == null || !now.isBefore(progress.lastAttemptAt.plus(MIN_INTERVAL))) {
       send(roomId, progress, now);
       return;
     }
@@ -59,8 +59,9 @@ public class AnswerProgressPublisher implements RoomTaskCanceller {
   }
 
   private void schedule(Long roomId, Progress progress) {
+    if (stopping || progressByRoom.get(roomId) != progress) return;
     try {
-      progress.future = scheduler.schedule(progress.lastSentAt.plus(MIN_INTERVAL),
+      progress.future = scheduler.schedule(progress.lastAttemptAt.plus(MIN_INTERVAL),
           () -> locks.executeWithLock(roomId, () -> flush(roomId, progress)));
     } catch (RuntimeException failure) {
       log.error("Failed to schedule answer progress for roomId={}", roomId, failure);
@@ -71,7 +72,7 @@ public class AnswerProgressPublisher implements RoomTaskCanceller {
     if (stopping || progressByRoom.get(roomId) != progress) return;
     progress.future = null;
     Instant now = clock.instant();
-    if (now.isBefore(progress.lastSentAt.plus(MIN_INTERVAL))) {
+    if (now.isBefore(progress.lastAttemptAt.plus(MIN_INTERVAL))) {
       schedule(roomId, progress);
       return;
     }
@@ -79,21 +80,22 @@ public class AnswerProgressPublisher implements RoomTaskCanceller {
   }
 
   private void send(Long roomId, Progress progress, Instant now) {
-    progress.lastSentAt = now;
-    lastSentByRoom.put(roomId, now);
+    progress.lastAttemptAt = now;
+    lastAttemptByRoom.put(roomId, now);
     try {
       messaging.convertAndSendToUser(progress.ownerId.toString(), "/queue/rooms/" + roomId + "/stats",
           AnswerProgressMessage.of(progress.questionId, progress.answeredCount, now));
     } catch (RuntimeException failure) {
       // 전송 실패가 이미 커밋된 답안이나 전원 응답 마감을 방해하지 않게 한다.
-      log.error("Failed to send answer progress for roomId={}", roomId, failure);
+      log.error("Failed to send answer progress; retrying for roomId={}", roomId, failure);
+      schedule(roomId, progress);
     }
   }
 
   @Override
   public void cancelAll(Long roomId) {
     cancelPending(roomId);
-    lastSentByRoom.remove(roomId);
+    lastAttemptByRoom.remove(roomId);
   }
 
   private void cancelPending(Long roomId) {
@@ -105,7 +107,7 @@ public class AnswerProgressPublisher implements RoomTaskCanceller {
   void shutdown() {
     stopping = true;
     progressByRoom.keySet().forEach(this::cancelAll);
-    lastSentByRoom.clear();
+    lastAttemptByRoom.clear();
   }
 
   /** 갱신과 지연 전송은 같은 방 잠금으로 직렬화한다. 상태 전환 후 콜백은 객체 동일성으로 걸러낸다. */
@@ -113,13 +115,13 @@ public class AnswerProgressPublisher implements RoomTaskCanceller {
     private final Long ownerId;
     private final Long questionId;
     private int answeredCount;
-    private Instant lastSentAt;
+    private Instant lastAttemptAt;
     private ScheduledFuture<?> future;
 
-    private Progress(Long ownerId, Long questionId, Instant lastSentAt) {
+    private Progress(Long ownerId, Long questionId, Instant lastAttemptAt) {
       this.ownerId = ownerId;
       this.questionId = questionId;
-      this.lastSentAt = lastSentAt;
+      this.lastAttemptAt = lastAttemptAt;
     }
   }
 }
