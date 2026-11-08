@@ -124,6 +124,22 @@ class AnswerProgressPublisherTest {
     assertThatCode(() -> publish(42L, 812L, 1)).doesNotThrowAnyException();
   }
 
+  @Test void transientSendFailureRetriesWithoutAnotherAnswer() {
+    doThrow(new IllegalStateException("test transient broker failure")).doNothing().when(messaging)
+        .convertAndSendToUser(anyString(), anyString(), any());
+
+    publish(42L, 812L, 1);
+
+    assertThat(tasks).hasSize(1);
+    assertThat(tasks.getFirst().at()).isEqualTo(T0.plusMillis(500));
+    runNext();
+    var sent = ArgumentCaptor.forClass(AnswerProgressMessage.class);
+    verify(messaging, times(2)).convertAndSendToUser(eq("1"), eq("/queue/rooms/42/stats"), sent.capture());
+    assertThat(sent.getAllValues()).extracting(AnswerProgressMessage::answeredCount).containsExactly(1, 1);
+    assertThat(sent.getAllValues()).extracting(AnswerProgressMessage::sentAt).containsExactly(T0, T0.plusMillis(500));
+    assertThat(tasks).isEmpty();
+  }
+
   @Test void earlyTimerExecutionNeverSendsInsideHalfSecond() {
     publish(42L, 812L, 1);
     publish(42L, 812L, 2);

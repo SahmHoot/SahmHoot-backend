@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.sahmhoot.quiz.exception.BusinessException;
 import com.sahmhoot.quiz.exception.ErrorCode;
@@ -192,6 +193,21 @@ class AnswerTxServiceTest {
         .isInstanceOf(BusinessException.class)
         .extracting(e -> ((BusinessException) e).getErrorCode())
         .isEqualTo(ErrorCode.QUESTION_CLOSED);
+  }
+
+  @Test
+  @DisplayName("OPEN 문항의 마감 시각이 없으면 선택지 조회·답안 저장 전에 QUESTION_CLOSED로 거부한다")
+  void submitAnswer_missingClosesAt_rejectsBeforeChoiceLookup() {
+    var run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    var question = RunQuestion.builder().id(812L).quizRun(run).status(RunQuestionStatus.OPEN).build();
+    given(runQuestionRepository.findById(812L)).willReturn(Optional.of(question));
+
+    assertThatThrownBy(() -> answerTxService.submitAnswer(42L, 900L,
+        new SubmitAnswerRequest(812L, 3001L), Set.of(900L)))
+        .isInstanceOfSatisfying(BusinessException.class,
+            error -> assertThat(error.getErrorCode()).isEqualTo(ErrorCode.QUESTION_CLOSED));
+
+    verifyNoInteractions(runChoiceRepository, answerRepository);
   }
 
   @Test
