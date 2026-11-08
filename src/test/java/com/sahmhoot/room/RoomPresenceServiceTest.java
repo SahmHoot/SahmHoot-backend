@@ -10,7 +10,6 @@ import com.sahmhoot.room.exception.RoomException;
 import com.sahmhoot.room.repository.RoomParticipantRepository;
 import com.sahmhoot.room.repository.RoomRepository;
 import com.sahmhoot.room.service.RoomPresenceService;
-import com.sahmhoot.room.service.RoomPresenceService.CountChange;
 import com.sahmhoot.websocket.presence.RoomPresencePort;
 import com.sahmhoot.websocket.presence.RoomPresenceSnapshot;
 import java.time.Instant;
@@ -73,29 +72,21 @@ class RoomPresenceServiceTest {
     assertThatThrownBy(() -> service.onlineCount(room)).isInstanceOf(IllegalStateException.class);
   }
 
-  @Test void closedRoomDropsPendingPublication() {
+  @Test void missingOrClosedRoomDropsPendingPublication() {
+    when(rooms.findById(42L)).thenReturn(Optional.empty());
+    assertThat(service.currentCount(42L)).isEmpty();
+    when(rooms.findById(42L)).thenReturn(Optional.of(room));
     room.close(Instant.now());
-    assertThat(service.countChange(new RoomPresenceSnapshot(42L, Set.of(), false), null)).isEmpty();
-    verifyNoInteractions(source);
+    assertThat(service.currentCount(42L)).isEmpty();
+    verifyNoInteractions(source, participants);
   }
 
-  @Test void initialChangeReadsPreviousAndCurrentMembersInOneQuery() {
-    var previous = new RoomPresenceSnapshot(42L, Set.of(1L, 2L), true);
+  @Test void currentCountReadsLatestActiveMembersExcludingOwnerInOneQuery() {
     when(source.getPresence(42L)).thenReturn(new RoomPresenceSnapshot(42L, Set.of(1L, 3L, 4L), true));
-    when(participants.findByRoomIdAndUserIdInAndLeftAtIsNull(42L, Set.of(1L, 2L, 3L, 4L)))
-        .thenReturn(List.of(member(100L, 1L), member(200L, 2L), member(300L, 3L), member(400L, 4L)));
-    assertThat(service.countChange(previous, null)).contains(new CountChange(1, 2));
+    when(participants.findByRoomIdAndUserIdInAndLeftAtIsNull(42L, Set.of(1L, 3L, 4L)))
+        .thenReturn(List.of(member(100L, 1L), member(300L, 3L)));
+    assertThat(service.currentCount(42L)).contains(1);
     verify(participants, times(1)).findByRoomIdAndUserIdInAndLeftAtIsNull(anyLong(), anySet());
-  }
-
-  @Test void knownCountSkipsPreviousMembersAndQueriesOnlyCurrentUsers() {
-    var previous = new RoomPresenceSnapshot(42L, Set.of(2L), false);
-    when(source.getPresence(42L)).thenReturn(new RoomPresenceSnapshot(42L, Set.of(3L), false));
-    when(participants.findByRoomIdAndUserIdInAndLeftAtIsNull(42L, Set.of(3L)))
-        .thenReturn(List.of(member(300L, 3L)));
-    assertThat(service.countChange(previous, 7)).contains(new CountChange(7, 1));
-    verify(participants).findByRoomIdAndUserIdInAndLeftAtIsNull(42L, Set.of(3L));
-    verifyNoMoreInteractions(participants);
   }
 
   @Test void emptyOrOwnerOnlyRoomListNeedsNoParticipantQuery() {

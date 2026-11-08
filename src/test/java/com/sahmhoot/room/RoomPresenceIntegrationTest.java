@@ -167,7 +167,7 @@ class RoomPresenceIntegrationTest {
     var before = snapshot(Set.of());
     current.set(snapshot(Set.of(owner.getId())));
     events.publishEvent(new RoomPresenceChangedEvent(before, current.get(), Instant.now()));
-    tasks.removeFirst().action().run();
+    assertThat(tasks).isEmpty();
     verify(messaging, never()).convertAndSend(eq(topic()), any(OnlineCountMessage.class));
   }
 

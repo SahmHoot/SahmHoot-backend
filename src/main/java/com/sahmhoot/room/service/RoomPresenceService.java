@@ -67,15 +67,9 @@ public class RoomPresenceService implements ParticipantPresencePort {
     return Map.copyOf(counts);
   }
 
-  public Optional<CountChange> countChange(RoomPresenceSnapshot previous, Integer knownCount) {
-    var room = rooms.findById(previous.roomId()).filter(value -> value.getStatus() != RoomStatus.CLOSED);
-    if (room.isEmpty()) return Optional.empty();
-    var current = snapshot(previous.roomId());
-    var candidates = new HashSet<>(current.onlineUserIds());
-    if (knownCount == null) candidates.addAll(previous.onlineUserIds());
-    var active = members(room.get(), candidates);
-    int before = knownCount != null ? knownCount : count(active, previous.onlineUserIds());
-    return Optional.of(new CountChange(before, count(active, current.onlineUserIds())));
+  /** 열린 방의 현재 접속 인원. 방이 없거나 종료됐으면 비어 있다. */
+  public Optional<Integer> currentCount(Long roomId) {
+    return rooms.findById(roomId).filter(room -> room.getStatus() != RoomStatus.CLOSED).map(this::onlineCount);
   }
 
   private RoomPresenceSnapshot snapshot(Long roomId) {
@@ -95,9 +89,4 @@ public class RoomPresenceService implements ParticipantPresencePort {
         .filter(participant -> !room.getHostId().equals(participant.getUserId())).toList();
   }
 
-  private int count(List<RoomParticipant> active, Set<Long> userIds) {
-    return (int) active.stream().filter(participant -> userIds.contains(participant.getUserId())).count();
-  }
-
-  public record CountChange(int previous, int current) {}
 }
