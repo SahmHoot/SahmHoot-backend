@@ -169,6 +169,34 @@ class AnswerTxServiceTest {
   }
 
   @Test
+  @DisplayName("접속자 감소 후에도 미응답 접속자가 남아 있으면 열린 문항을 마감 대상으로 반환하지 않는다")
+  void findFullyAnsweredQuestion_withUnansweredOnlineStudent_returnsEmpty() {
+    var run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    var question = RunQuestion.builder().id(812L).quizRun(run).status(RunQuestionStatus.OPEN).build();
+    given(quizRunRepository.findTopByRoomIdOrderByIdDesc(42L)).willReturn(Optional.of(run));
+    given(runQuestionRepository.findFirstByQuizRunIdAndStatus(77L, RunQuestionStatus.OPEN))
+        .willReturn(Optional.of(question));
+    given(answerRepository.countByRunQuestionIdAndParticipantIdIn(812L, Set.of(900L, 901L)))
+        .willReturn(1L);
+
+    assertThat(answerTxService.findFullyAnsweredQuestion(42L, Set.of(900L, 901L))).isEmpty();
+  }
+
+  @Test
+  @DisplayName("접속자 감소 후 남은 접속자 전원이 답했으면 열린 문항을 마감 대상으로 반환한다")
+  void findFullyAnsweredQuestion_allOnlineStudentsAnswered_returnsQuestion() {
+    var run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    var question = RunQuestion.builder().id(812L).quizRun(run).status(RunQuestionStatus.OPEN).build();
+    given(quizRunRepository.findTopByRoomIdOrderByIdDesc(42L)).willReturn(Optional.of(run));
+    given(runQuestionRepository.findFirstByQuizRunIdAndStatus(77L, RunQuestionStatus.OPEN))
+        .willReturn(Optional.of(question));
+    given(answerRepository.countByRunQuestionIdAndParticipantIdIn(812L, Set.of(900L, 901L)))
+        .willReturn(2L);
+
+    assertThat(answerTxService.findFullyAnsweredQuestion(42L, Set.of(900L, 901L))).contains(812L);
+  }
+
+  @Test
   @DisplayName("마감된 문항에 제출하면 QUESTION_CLOSED 예외를 던진다")
   void submitAnswer_questionClosed_throwsException() {
     Long roomId = 42L;

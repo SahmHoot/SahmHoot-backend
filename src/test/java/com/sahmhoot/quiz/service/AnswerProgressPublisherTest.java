@@ -5,8 +5,15 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.sahmhoot.quiz.dto.AnswerProgressResponse;
+import com.sahmhoot.quiz.dto.QuizResultResponse;
 import com.sahmhoot.quiz.dto.message.AnswerProgressMessage;
+import com.sahmhoot.quiz.dto.message.QuestionClosedMessage;
+import com.sahmhoot.quiz.dto.message.QuestionOpenedMessage;
+import com.sahmhoot.quiz.dto.message.QuizCanceledMessage;
+import com.sahmhoot.quiz.dto.message.QuizFinishedMessage;
+import com.sahmhoot.quiz.dto.message.QuizMessage;
 import com.sahmhoot.quiz.dto.message.RoomWaitingMessage;
+import com.sahmhoot.quiz.entity.QuestionType;
 import com.sahmhoot.quiz.event.QuizStateChangedEvent;
 import com.sahmhoot.quiz.lock.RoomLockManager;
 import com.sahmhoot.quiz.schedule.AnswerTaskScheduler;
@@ -17,6 +24,8 @@ import java.util.List;
 import java.util.concurrent.ScheduledFuture;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import tools.jackson.databind.json.JsonMapper;
@@ -70,14 +79,59 @@ class AnswerProgressPublisherTest {
     assertThat(tasks).isEmpty();
   }
 
-  @Test void transitionCancelsPendingMessageAndLateCallbackDoesNothing() {
+  @Test void closingSameQuestionPreservesPendingLatestCountAtHalfSecond() {
+    publish(42L, 812L, 1);
+    clock.setTo(T0.plusMillis(100));
+    publish(42L, 812L, 2);
+    clock.setTo(T0.plusMillis(200));
+    publish(42L, 812L, 3);
+    var pending = tasks.getFirst();
+
+    publisher.onQuizChanged(new QuizStateChangedEvent(42L,
+        QuestionClosedMessage.of(77L, 812L, 3001L, true, T0.plusSeconds(3), clock.instant())));
+
+    verify(pending.future(), never()).cancel(anyBoolean());
+    verify(messaging, times(1)).convertAndSendToUser(anyString(), anyString(), any());
+    runNext();
+    var sent = ArgumentCaptor.forClass(AnswerProgressMessage.class);
+    verify(messaging, times(2)).convertAndSendToUser(eq("1"), eq("/queue/rooms/42/stats"), sent.capture());
+    assertThat(sent.getAllValues()).extracting(AnswerProgressMessage::answeredCount).containsExactly(1, 3);
+    assertThat(sent.getAllValues()).extracting(AnswerProgressMessage::sentAt).containsExactly(T0, T0.plusMillis(500));
+  }
+
+  @Test void closingDifferentQuestionCancelsPendingMessage() {
     publish(42L, 812L, 1);
     publish(42L, 812L, 2);
     var pending = tasks.getFirst();
-    publisher.onQuizChanged(new QuizStateChangedEvent(42L, RoomWaitingMessage.of(T0)));
+
+    publisher.onQuizChanged(new QuizStateChangedEvent(42L,
+        QuestionClosedMessage.of(77L, 813L, 3002L, true, T0.plusSeconds(3), T0)));
+    runNext();
+
+    verify(pending.future()).cancel(false);
+    verify(messaging, times(1)).convertAndSendToUser(anyString(), anyString(), any());
+  }
+
+  @ParameterizedTest @MethodSource("transitions")
+  void transitionCancelsPendingMessageAndLateCallbackDoesNothing(QuizMessage transition) {
+    publish(42L, 812L, 1);
+    publish(42L, 812L, 2);
+    var pending = tasks.getFirst();
+    publisher.onQuizChanged(new QuizStateChangedEvent(42L,
+        QuestionClosedMessage.of(77L, 812L, 3001L, false, T0.plusSeconds(3), T0)));
+    publisher.onQuizChanged(new QuizStateChangedEvent(42L, transition));
     runNext();
     verify(pending.future()).cancel(false);
     verify(messaging, times(1)).convertAndSendToUser(anyString(), anyString(), any());
+  }
+
+  private static List<QuizMessage> transitions() {
+    return List.of(
+        QuestionOpenedMessage.of(77L, 813L, 2, 2, QuestionType.TRUE_FALSE, "다음 문항", 60,
+            T0.plusSeconds(60), List.of(), T0),
+        QuizFinishedMessage.of(77L, new QuizResultResponse(List.of()), T0),
+        QuizCanceledMessage.of(77L, T0),
+        RoomWaitingMessage.of(T0));
   }
 
   @Test void oldCallbackCannotOverwriteNewQuestion() {
