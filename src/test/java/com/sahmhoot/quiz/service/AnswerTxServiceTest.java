@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.sahmhoot.quiz.exception.BusinessException;
 import com.sahmhoot.quiz.exception.ErrorCode;
@@ -16,6 +17,7 @@ import com.sahmhoot.quiz.entity.RunChoice;
 import com.sahmhoot.quiz.entity.RunQuestion;
 import com.sahmhoot.quiz.entity.RunQuestionStatus;
 import com.sahmhoot.quiz.repository.AnswerRepository;
+import com.sahmhoot.quiz.repository.QuizRunRepository;
 import com.sahmhoot.quiz.repository.RunChoiceRepository;
 import com.sahmhoot.quiz.repository.RunQuestionRepository;
 import java.time.Clock;
@@ -42,6 +44,9 @@ class AnswerTxServiceTest {
   @Mock
   private RunChoiceRepository runChoiceRepository;
 
+  @Mock
+  private QuizRunRepository quizRunRepository;
+
   /** 테스트 시작 시각에 멈춘 시계. 서비스가 읽는 "지금"이 실행 중에 바뀌지 않는다. */
   private final Clock clock = Clock.fixed(Instant.now(), ZoneOffset.UTC);
 
@@ -53,6 +58,7 @@ class AnswerTxServiceTest {
         answerRepository,
         runQuestionRepository,
         runChoiceRepository,
+        quizRunRepository,
         clock
     );
   }
@@ -163,6 +169,34 @@ class AnswerTxServiceTest {
   }
 
   @Test
+  @DisplayName("접속자 감소 후에도 미응답 접속자가 남아 있으면 열린 문항을 마감 대상으로 반환하지 않는다")
+  void findFullyAnsweredQuestion_withUnansweredOnlineStudent_returnsEmpty() {
+    var run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    var question = RunQuestion.builder().id(812L).quizRun(run).status(RunQuestionStatus.OPEN).build();
+    given(quizRunRepository.findTopByRoomIdOrderByIdDesc(42L)).willReturn(Optional.of(run));
+    given(runQuestionRepository.findFirstByQuizRunIdAndStatus(77L, RunQuestionStatus.OPEN))
+        .willReturn(Optional.of(question));
+    given(answerRepository.countByRunQuestionIdAndParticipantIdIn(812L, Set.of(900L, 901L)))
+        .willReturn(1L);
+
+    assertThat(answerTxService.findFullyAnsweredQuestion(42L, Set.of(900L, 901L))).isEmpty();
+  }
+
+  @Test
+  @DisplayName("접속자 감소 후 남은 접속자 전원이 답했으면 열린 문항을 마감 대상으로 반환한다")
+  void findFullyAnsweredQuestion_allOnlineStudentsAnswered_returnsQuestion() {
+    var run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    var question = RunQuestion.builder().id(812L).quizRun(run).status(RunQuestionStatus.OPEN).build();
+    given(quizRunRepository.findTopByRoomIdOrderByIdDesc(42L)).willReturn(Optional.of(run));
+    given(runQuestionRepository.findFirstByQuizRunIdAndStatus(77L, RunQuestionStatus.OPEN))
+        .willReturn(Optional.of(question));
+    given(answerRepository.countByRunQuestionIdAndParticipantIdIn(812L, Set.of(900L, 901L)))
+        .willReturn(2L);
+
+    assertThat(answerTxService.findFullyAnsweredQuestion(42L, Set.of(900L, 901L))).contains(812L);
+  }
+
+  @Test
   @DisplayName("마감된 문항에 제출하면 QUESTION_CLOSED 예외를 던진다")
   void submitAnswer_questionClosed_throwsException() {
     Long roomId = 42L;
@@ -187,6 +221,21 @@ class AnswerTxServiceTest {
         .isInstanceOf(BusinessException.class)
         .extracting(e -> ((BusinessException) e).getErrorCode())
         .isEqualTo(ErrorCode.QUESTION_CLOSED);
+  }
+
+  @Test
+  @DisplayName("OPEN 문항의 마감 시각이 없으면 선택지 조회·답안 저장 전에 QUESTION_CLOSED로 거부한다")
+  void submitAnswer_missingClosesAt_rejectsBeforeChoiceLookup() {
+    var run = QuizRun.builder().id(77L).roomId(42L).status(QuizRunStatus.RUNNING).build();
+    var question = RunQuestion.builder().id(812L).quizRun(run).status(RunQuestionStatus.OPEN).build();
+    given(runQuestionRepository.findById(812L)).willReturn(Optional.of(question));
+
+    assertThatThrownBy(() -> answerTxService.submitAnswer(42L, 900L,
+        new SubmitAnswerRequest(812L, 3001L), Set.of(900L)))
+        .isInstanceOfSatisfying(BusinessException.class,
+            error -> assertThat(error.getErrorCode()).isEqualTo(ErrorCode.QUESTION_CLOSED));
+
+    verifyNoInteractions(runChoiceRepository, answerRepository);
   }
 
   @Test

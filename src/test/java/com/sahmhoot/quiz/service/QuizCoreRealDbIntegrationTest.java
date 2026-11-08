@@ -17,11 +17,14 @@ import com.sahmhoot.quiz.dto.QuizResultResponse;
 import com.sahmhoot.quiz.dto.StartQuizRequest;
 import com.sahmhoot.quiz.dto.StartQuizResponse;
 import com.sahmhoot.quiz.dto.SubmitAnswerRequest;
+import com.sahmhoot.quiz.schedule.AnswerTaskScheduler;
+import com.sahmhoot.room.service.RoomPresenceService;
 import com.sahmhoot.quiz.dto.message.QuestionOpenedMessage;
 import com.sahmhoot.quiz.dto.message.QuestionClosedMessage;
 import com.sahmhoot.quiz.dto.message.QuizCanceledMessage;
 import com.sahmhoot.quiz.dto.message.QuizMessage;
 import com.sahmhoot.quiz.dto.message.RoomWaitingMessage;
+import com.sahmhoot.quiz.dto.message.AnswerProgressMessage;
 import com.sahmhoot.quiz.event.QuizStateChangedEvent;
 import com.sahmhoot.quiz.lock.RoomLockManager;
 import com.sahmhoot.quiz.entity.QuizRun;
@@ -56,6 +59,8 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.json.JsonMapper;
 import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -90,6 +95,9 @@ class QuizCoreRealDbIntegrationTest {
   private static final Long CHOICE_2_1_ID = 603L; // Q2 오답 (스택)
   private static final Long CHOICE_2_2_ID = 604L; // Q2 정답 (큐)
 
+  @MockitoBean RoomPresenceService presence;
+  @MockitoBean AnswerTaskScheduler answerTasks;
+
   @Autowired
   private JdbcTemplate jdbcTemplate;
 
@@ -101,6 +109,9 @@ class QuizCoreRealDbIntegrationTest {
 
   @Autowired
   private AnswerService answerService;
+
+  @Autowired
+  private AnswerProgressPublisher progressPublisher;
 
   @Autowired
   private QuizResultService quizResultService;
@@ -120,7 +131,7 @@ class QuizCoreRealDbIntegrationTest {
   @Autowired
   private RunChoiceRepository runChoiceRepository;
 
-  @Autowired
+  @MockitoSpyBean
   private AnswerRepository answerRepository;
 
   @MockitoBean
@@ -159,6 +170,8 @@ class QuizCoreRealDbIntegrationTest {
   }
 
   private void cleanUpData() {
+    // 같은 방 ID를 재사용하므로 DB와 방별 전송 상태를 함께 정리한다.
+    roomLockManager.executeWithLock(ROOM_ID, () -> progressPublisher.cancelAll(ROOM_ID));
     // 외래 키 역순으로 테스트 데이터 삭제
     jdbcTemplate.update("DELETE FROM answers WHERE participant_id IN (?, ?)", PARTICIPANT_1_ID, PARTICIPANT_2_ID);
     jdbcTemplate.update("DELETE FROM run_choices WHERE run_question_id IN (SELECT id FROM run_questions WHERE quiz_run_id IN (SELECT id FROM quiz_runs WHERE room_id = ?))", ROOM_ID);
@@ -302,12 +315,11 @@ class QuizCoreRealDbIntegrationTest {
     assertThat(stackChoice.getContent()).isEqualTo("스택");
 
     // 2. 답안 제출 (submitAnswer)
-    // 참가자 1: 정답(스택) 제출 (접속 상태 연동 전 기본값: 조기 마감 없음)
+    // 참가자 1: 정답(스택) 제출 (이 테스트의 접속자는 빈 집합이므로 조기 마감 없음)
     AnswerProgressResponse progress1 = answerService.submitAnswer(
         ROOM_ID,
         PARTICIPANT_1_ID,
-        new SubmitAnswerRequest(q1.getId(), stackChoice.getId()),
-        java.util.Set.of()
+        new SubmitAnswerRequest(q1.getId(), stackChoice.getId())
     );
     assertThat(progress1.answeredCount()).isEqualTo(1);
 
@@ -315,8 +327,7 @@ class QuizCoreRealDbIntegrationTest {
     AnswerProgressResponse progress2 = answerService.submitAnswer(
         ROOM_ID,
         PARTICIPANT_2_ID,
-        new SubmitAnswerRequest(q1.getId(), queueChoice.getId()),
-        java.util.Set.of()
+        new SubmitAnswerRequest(q1.getId(), queueChoice.getId())
     );
     assertThat(progress2.answeredCount()).isEqualTo(2);
 
@@ -324,8 +335,7 @@ class QuizCoreRealDbIntegrationTest {
     answerService.submitAnswer(
         ROOM_ID,
         PARTICIPANT_2_ID,
-        new SubmitAnswerRequest(q1.getId(), stackChoice.getId()),
-        java.util.Set.of()
+        new SubmitAnswerRequest(q1.getId(), stackChoice.getId())
     );
 
     // DB 검증: answers 테이블에 1인 1답안이 유지되고, 참가자 2의 선택지가 갱신되었는지
@@ -364,8 +374,8 @@ class QuizCoreRealDbIntegrationTest {
     RunChoice q2Incorrect = q2Choices.stream().filter(c -> !c.isCorrect()).findFirst().orElseThrow();
 
     // 참가자 1: 정답, 참가자 2: 오답 제출
-    answerService.submitAnswer(ROOM_ID, PARTICIPANT_1_ID, new SubmitAnswerRequest(q2.getId(), q2Correct.getId()), java.util.Set.of());
-    answerService.submitAnswer(ROOM_ID, PARTICIPANT_2_ID, new SubmitAnswerRequest(q2.getId(), q2Incorrect.getId()), java.util.Set.of());
+    answerService.submitAnswer(ROOM_ID, PARTICIPANT_1_ID, new SubmitAnswerRequest(q2.getId(), q2Correct.getId()));
+    answerService.submitAnswer(ROOM_ID, PARTICIPANT_2_ID, new SubmitAnswerRequest(q2.getId(), q2Incorrect.getId()));
 
     // 2번 문항 마감 (마지막 문항)
     quizCoreService.closeQuestion(ROOM_ID, q2.getId());
@@ -610,8 +620,57 @@ class QuizCoreRealDbIntegrationTest {
   }
 
   @Test
-  @DisplayName("실제 DB: 전원 응답 시(answeredCount >= onlineCount) 문항이 즉시 마감되고 DB에 반영된다")
+  void answerProgressIsSentAfterCommitWhileRoomLockIsHeld() {
+    var started = quizCoreService.startQuiz(ROOM_ID, new StartQuizRequest(QUESTION_SET_ID), HOST_USER_ID);
+    var choice = runChoiceRepository.findByRunQuestionIdOrderByOrderNoAsc(started.firstRunQuestionId()).getFirst();
+    var committedCounts = new ArrayList<Integer>();
+    var lockStates = new ArrayList<Boolean>();
+    var transactionStates = new ArrayList<Boolean>();
+    doAnswer(call -> {
+      // 별도 연결로 조회해 커밋 완료를 확인한다. 검증은 콜백 밖에서 수행한다.
+      try (var connection = dataSource.getConnection();
+          var query = connection.prepareStatement("SELECT COUNT(*) FROM answers WHERE run_question_id = ?")) {
+        query.setLong(1, started.firstRunQuestionId());
+        try (var result = query.executeQuery()) {
+          result.next();
+          committedCounts.add(result.getInt(1));
+        }
+      }
+      lockStates.add(roomLockManager.isLocked(ROOM_ID));
+      transactionStates.add(TransactionSynchronizationManager.isActualTransactionActive());
+      return null;
+    }).when(messagingTemplate).convertAndSendToUser(eq(HOST_USER_ID.toString()), eq("/queue/rooms/10/stats"), any(AnswerProgressMessage.class));
+
+    answerService.submitAnswer(ROOM_ID, PARTICIPANT_1_ID,
+        new SubmitAnswerRequest(started.firstRunQuestionId(), choice.getId()));
+
+    assertThat(committedCounts).containsExactly(1);
+    assertThat(lockStates).containsExactly(true);
+    assertThat(transactionStates).containsExactly(false);
+  }
+
+  @Test
+  void rolledBackAnswerDoesNotPublishProgressOrCloseQuestion() {
+    var started = quizCoreService.startQuiz(ROOM_ID, new StartQuizRequest(QUESTION_SET_ID), HOST_USER_ID);
+    var choice = runChoiceRepository.findByRunQuestionIdOrderByOrderNoAsc(started.firstRunQuestionId()).getFirst();
+    clearInvocations(messagingTemplate);
+    org.mockito.Mockito.doThrow(new IllegalStateException("test count failure"))
+        .when(answerRepository).countByRunQuestionId(started.firstRunQuestionId());
+
+    assertThatThrownBy(() -> answerService.submitAnswer(ROOM_ID, PARTICIPANT_1_ID,
+        new SubmitAnswerRequest(started.firstRunQuestionId(), choice.getId()))).isInstanceOf(IllegalStateException.class);
+
+    assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM answers WHERE run_question_id = ?",
+        Integer.class, started.firstRunQuestionId())).isZero();
+    assertThat(runQuestionRepository.findById(started.firstRunQuestionId()).orElseThrow().isOpen()).isTrue();
+    verifyNoInteractions(messagingTemplate);
+  }
+
+  @Test
+  @DisplayName("실제 DB: 접속 중인 참여자 전원 응답 시 문항이 즉시 마감되고 DB에 반영된다")
   void submitAnswer_whenAllOnlineParticipantsAnswered_immediatelyClosesQuestionInRealDb() {
+    org.mockito.Mockito.when(presence.getOnlineParticipantIds(ROOM_ID))
+        .thenReturn(java.util.Set.of(PARTICIPANT_1_ID, PARTICIPANT_2_ID));
     // 1. 퀴즈 시작
     StartQuizResponse startResponse = quizCoreTxService.startQuiz(
         ROOM_ID,
@@ -628,8 +687,7 @@ class QuizCoreRealDbIntegrationTest {
     AnswerProgressResponse progress1 = answerService.submitAnswer(
         ROOM_ID,
         PARTICIPANT_1_ID,
-        new SubmitAnswerRequest(q1Id, stackChoice.getId()),
-        java.util.Set.of(PARTICIPANT_1_ID, PARTICIPANT_2_ID)
+        new SubmitAnswerRequest(q1Id, stackChoice.getId())
     );
     assertThat(progress1.answeredCount()).isEqualTo(1);
     String statusAfterP1 = jdbcTemplate.queryForObject(
@@ -640,8 +698,7 @@ class QuizCoreRealDbIntegrationTest {
     AnswerProgressResponse progress2 = answerService.submitAnswer(
         ROOM_ID,
         PARTICIPANT_2_ID,
-        new SubmitAnswerRequest(q1Id, queueChoice.getId()),
-        java.util.Set.of(PARTICIPANT_1_ID, PARTICIPANT_2_ID)
+        new SubmitAnswerRequest(q1Id, queueChoice.getId())
     );
     assertThat(progress2.answeredCount()).isEqualTo(2);
 
@@ -657,8 +714,7 @@ class QuizCoreRealDbIntegrationTest {
     assertThatThrownBy(() -> answerService.submitAnswer(
         ROOM_ID,
         PARTICIPANT_2_ID,
-        new SubmitAnswerRequest(q1Id, stackChoice.getId()),
-        java.util.Set.of(PARTICIPANT_1_ID, PARTICIPANT_2_ID)
+        new SubmitAnswerRequest(q1Id, stackChoice.getId())
     )).isInstanceOf(BusinessException.class)
         .extracting(e -> ((BusinessException) e).getErrorCode())
         .isEqualTo(ErrorCode.QUESTION_CLOSED);

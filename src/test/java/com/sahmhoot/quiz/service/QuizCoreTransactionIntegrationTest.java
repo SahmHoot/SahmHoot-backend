@@ -26,6 +26,7 @@ import com.sahmhoot.quiz.repository.RunChoiceRepository;
 import com.sahmhoot.quiz.repository.RunQuestionRepository;
 import com.sahmhoot.quiz.schedule.QuizTaskScheduler;
 import com.sahmhoot.quiz.service.port.QuestionSetPort;
+import com.sahmhoot.quiz.service.port.ParticipantPresencePort;
 import com.sahmhoot.quiz.service.port.QuestionSetSnapshot;
 import com.sahmhoot.quiz.service.port.RoomPort;
 import com.sahmhoot.quiz.service.port.RoomSnapshot;
@@ -178,9 +179,10 @@ class QuizCoreTransactionIntegrationTest {
         AnswerRepository answerRepository,
         RunQuestionRepository runQuestionRepository,
         RunChoiceRepository runChoiceRepository,
+        QuizRunRepository quizRunRepository,
         Clock clock
     ) {
-      return new AnswerTxService(answerRepository, runQuestionRepository, runChoiceRepository, clock);
+      return new AnswerTxService(answerRepository, runQuestionRepository, runChoiceRepository, quizRunRepository, clock);
     }
 
     @Bean
@@ -189,7 +191,8 @@ class QuizCoreTransactionIntegrationTest {
         AnswerTxService answerTxService,
         QuizCoreService quizCoreService
     ) {
-      return new AnswerService(roomLockManager, answerTxService, quizCoreService);
+      return new AnswerService(roomLockManager, answerTxService, quizCoreService, roomPort(),
+          mock(ParticipantPresencePort.class), mock(AnswerProgressPublisher.class));
     }
   }
 
@@ -296,6 +299,7 @@ class QuizCoreTransactionIntegrationTest {
   @Test
   @DisplayName("submitAnswer 호출 시 방 잠금 안에서 Spring 트랜잭션이 활성화되고 커밋 후 잠금이 해제된다 (Issue 1)")
   void submitAnswer_executesWithinSpringTransactionAndLock() {
+    given(roomPort.findRoom(42L)).willReturn(Optional.of(new RoomSnapshot(42L, 1L, RoomStatus.PLAYING)));
     Long roomId = 42L;
     Long participantId = 900L;
     Long runQuestionId = 812L;
@@ -328,8 +332,7 @@ class QuizCoreTransactionIntegrationTest {
     AnswerProgressResponse response = answerService.submitAnswer(
         roomId,
         participantId,
-        new SubmitAnswerRequest(runQuestionId, choiceId),
-        java.util.Set.of()
+        new SubmitAnswerRequest(runQuestionId, choiceId)
     );
 
     assertThat(response).isNotNull();

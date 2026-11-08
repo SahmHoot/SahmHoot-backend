@@ -6,7 +6,10 @@ import com.sahmhoot.quiz.dto.SubmitAnswerRequest;
 import com.sahmhoot.quiz.entity.Answer;
 import com.sahmhoot.quiz.entity.RunChoice;
 import com.sahmhoot.quiz.entity.RunQuestion;
+import com.sahmhoot.quiz.entity.QuizRun;
+import com.sahmhoot.quiz.entity.RunQuestionStatus;
 import com.sahmhoot.quiz.repository.AnswerRepository;
+import com.sahmhoot.quiz.repository.QuizRunRepository;
 import com.sahmhoot.quiz.repository.RunChoiceRepository;
 import com.sahmhoot.quiz.repository.RunQuestionRepository;
 import java.time.Clock;
@@ -31,6 +34,7 @@ public class AnswerTxService {
   private final AnswerRepository answerRepository;
   private final RunQuestionRepository runQuestionRepository;
   private final RunChoiceRepository runChoiceRepository;
+  private final QuizRunRepository quizRunRepository;
   /** 현재 시각을 읽는 시계. 운영은 진짜 UTC 시계, 테스트는 가짜 시계가 들어온다({@code QuizClockConfig}). */
   private final Clock clock;
 
@@ -66,6 +70,15 @@ public class AnswerTxService {
     return answerRepository.countByRunQuestionId(runQuestionId);
   }
 
+  @Transactional(readOnly = true)
+  public Optional<Long> findFullyAnsweredQuestion(Long roomId, Set<Long> onlineParticipantIds) {
+    if (onlineParticipantIds.isEmpty()) return Optional.empty();
+    return quizRunRepository.findTopByRoomIdOrderByIdDesc(roomId).filter(QuizRun::isRunning)
+        .flatMap(run -> runQuestionRepository.findFirstByQuizRunIdAndStatus(run.getId(), RunQuestionStatus.OPEN))
+        .filter(question -> hasEveryOnlineParticipantAnswered(question.getId(), onlineParticipantIds))
+        .map(RunQuestion::getId);
+  }
+
   private void validateAnswerWindow(RunQuestion question, Long roomId, Instant now) {
     if (!question.getQuizRun().getRoomId().equals(roomId)) {
       throw new BusinessException(ErrorCode.QUESTION_NOT_FOUND);
@@ -74,9 +87,13 @@ public class AnswerTxService {
       throw new BusinessException(ErrorCode.QUESTION_CLOSED);
     }
 
-    // 06 규격 5절: closed_at이 없고 서버 시각이 closes_at + 1초 이내여야 한다.
-    Instant lastAcceptedAt = question.getClosesAt() != null ? question.getClosesAt().plusSeconds(1) : now;
-    if (!question.isOpen() || question.getClosedAt() != null || now.isAfter(lastAcceptedAt)) {
+    if (!question.isOpen() || question.getClosedAt() != null || question.getClosesAt() == null) {
+      throw new BusinessException(ErrorCode.QUESTION_CLOSED);
+    }
+
+    // 06 규격 5절: 마감 예정 시각이 있는 문항만 closes_at + 1초까지 답을 받는다.
+    Instant lastAcceptedAt = question.getClosesAt().plusSeconds(1);
+    if (now.isAfter(lastAcceptedAt)) {
       throw new BusinessException(ErrorCode.QUESTION_CLOSED);
     }
   }

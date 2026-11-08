@@ -9,7 +9,6 @@ import com.sahmhoot.quiz.service.port.RoomPort;
 import com.sahmhoot.quiz.service.port.RoomSnapshot;
 import jakarta.validation.Valid;
 import java.security.Principal;
-import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
@@ -63,9 +62,8 @@ public class QuizAnswerMessageController {
     // userId -> participantId 조회 (없으면 NOT_PARTICIPANT)
     Long participantId = roomPort.findParticipantId(roomId, userId)
         .orElseThrow(() -> new BusinessException(ErrorCode.NOT_PARTICIPANT));
-    // TODO: Room 담당의 접속 상태 기능과 연동해 실제 접속 중인 비소유 participantId 집합을 전달한다.
-    // 연동 전에는 조기 마감을 비활성화한다.
-    AnswerProgressResponse progress = answerService.submitAnswer(roomId, participantId, request, Set.of());
+    // 최신 접속자 집합은 서비스가 같은 방 잠금 안에서 조회한다.
+    AnswerProgressResponse progress = answerService.submitAnswer(roomId, participantId, request);
     log.debug("Handled answer for roomId={}, participantId={}, answeredCount={}",
         roomId, participantId, progress.answeredCount());
   }

@@ -15,7 +15,6 @@ import com.sahmhoot.quiz.service.port.RoomSnapshot;
 import com.sahmhoot.quiz.service.port.RoomStatus;
 import java.security.Principal;
 import java.util.Optional;
-import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -88,12 +87,12 @@ class QuizAnswerMessageControllerTest {
 
     given(roomPort.findRoom(roomId)).willReturn(Optional.of(new RoomSnapshot(roomId, hostUserId, RoomStatus.PLAYING)));
     given(roomPort.findParticipantId(roomId, studentUserId)).willReturn(Optional.of(participantId));
-    given(answerService.submitAnswer(eq(roomId), eq(participantId), eq(request), eq(Set.of())))
+    given(answerService.submitAnswer(eq(roomId), eq(participantId), eq(request)))
         .willReturn(new AnswerProgressResponse(812L, 1));
 
     messageController.handleAnswer(roomId, request, principal);
 
-    verify(answerService).submitAnswer(eq(roomId), eq(participantId), eq(request), eq(Set.of()));
+    verify(answerService).submitAnswer(eq(roomId), eq(participantId), eq(request));
   }
 
   @Test
