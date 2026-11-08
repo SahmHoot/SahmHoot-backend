@@ -194,6 +194,13 @@ class AnswerRealtimeIntegrationTest {
     assertThat(question.getClosedAt()).isBefore(question.getClosesAt());
     assertThat(events.values).filteredOn(event -> event.roomId().equals(roomId)
         && event.message() instanceof QuestionClosedMessage).hasSize(1);
+    JsonNode latest = null;
+    while (latest == null || latest.path("answeredCount").asInt() < 3) {
+      latest = ownerStats.poll(WAIT.toSeconds(), TimeUnit.SECONDS);
+      assertThat(latest).as("마감 뒤에도 교수에게 최종 응답 수가 전송되어야 한다").isNotNull();
+    }
+    assertThat(latest.path("runQuestionId").asLong()).isEqualTo(quiz.firstRunQuestionId());
+    assertThat(latest.path("answeredCount").asInt()).isEqualTo(3);
   }
 
   @Test void unansweredStudentDisconnectsAndRemainingAnswersImmediatelyCloseQuestion() throws Exception {
@@ -218,6 +225,24 @@ class AnswerRealtimeIntegrationTest {
 
     assertThat(closed()).isFalse();
     assertThat(answerCount()).isZero();
+  }
+
+  @Test void disconnectKeepsQuestionOpenWhileAnOnlineStudentHasNotAnswered() throws Exception {
+    sendAnswer(0, correctChoice);
+    await(() -> answerCount() == 1);
+
+    students.get(2).socket().close();
+    await(() -> presence.getOnlineParticipantIds(roomId).size() == 2);
+    answers.closeIfAllAnswered(roomId);
+
+    assertThat(presence.getOnlineParticipantIds(roomId))
+        .containsExactlyInAnyOrder(participantIds.get(0), participantIds.get(1));
+    assertThat(closed()).isFalse();
+    assertThat(answerCount()).isEqualTo(1);
+
+    sendAnswer(1, wrongChoice);
+    await(this::closed);
+    assertThat(answerCount()).isEqualTo(2);
   }
 
   @Test void changingAnswerKeepsOneRowAndOnlyProfessorReceivesProgress() throws Exception {
