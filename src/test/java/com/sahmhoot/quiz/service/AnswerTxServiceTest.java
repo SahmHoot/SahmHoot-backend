@@ -16,6 +16,7 @@ import com.sahmhoot.quiz.entity.RunChoice;
 import com.sahmhoot.quiz.entity.RunQuestion;
 import com.sahmhoot.quiz.entity.RunQuestionStatus;
 import com.sahmhoot.quiz.repository.AnswerRepository;
+import com.sahmhoot.quiz.repository.QuizRunRepository;
 import com.sahmhoot.quiz.repository.RunChoiceRepository;
 import com.sahmhoot.quiz.repository.RunQuestionRepository;
 import java.time.Clock;
@@ -42,6 +43,9 @@ class AnswerTxServiceTest {
   @Mock
   private RunChoiceRepository runChoiceRepository;
 
+  @Mock
+  private QuizRunRepository quizRunRepository;
+
   /** 테스트 시작 시각에 멈춘 시계. 서비스가 읽는 "지금"이 실행 중에 바뀌지 않는다. */
   private final Clock clock = Clock.fixed(Instant.now(), ZoneOffset.UTC);
 
@@ -53,6 +57,7 @@ class AnswerTxServiceTest {
         answerRepository,
         runQuestionRepository,
         runChoiceRepository,
+        quizRunRepository,
         clock
     );
   }
