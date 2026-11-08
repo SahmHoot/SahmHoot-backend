@@ -2,6 +2,7 @@ package com.sahmhoot.quiz.service;
 
 import com.sahmhoot.quiz.dto.AnswerProgressResponse;
 import com.sahmhoot.quiz.dto.message.AnswerProgressMessage;
+import com.sahmhoot.quiz.dto.message.QuestionClosedMessage;
 import com.sahmhoot.quiz.event.QuizStateChangedEvent;
 import com.sahmhoot.quiz.schedule.AnswerTaskScheduler;
 import com.sahmhoot.quiz.service.port.RoomLockPort;
@@ -54,6 +55,11 @@ public class AnswerProgressPublisher implements RoomTaskCanceller {
 
   @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
   public void onQuizChanged(QuizStateChangedEvent event) {
+    // 마감 직전 집계는 마감 뒤에도 0.5초 간격으로 보낸다. 교수 화면은 3초 피드백 동안에도 응답 수를 표시한다.
+    if (event.message() instanceof QuestionClosedMessage closed) {
+      var progress = progressByRoom.get(event.roomId());
+      if (progress != null && progress.questionId.equals(closed.runQuestionId())) return;
+    }
     // 문항·회차가 바뀌어도 방의 전송 간격은 유지한다.
     cancelPending(event.roomId());
   }
