@@ -6,7 +6,10 @@ import com.sahmhoot.quiz.dto.SubmitAnswerRequest;
 import com.sahmhoot.quiz.entity.Answer;
 import com.sahmhoot.quiz.entity.RunChoice;
 import com.sahmhoot.quiz.entity.RunQuestion;
+import com.sahmhoot.quiz.entity.QuizRun;
+import com.sahmhoot.quiz.entity.RunQuestionStatus;
 import com.sahmhoot.quiz.repository.AnswerRepository;
+import com.sahmhoot.quiz.repository.QuizRunRepository;
 import com.sahmhoot.quiz.repository.RunChoiceRepository;
 import com.sahmhoot.quiz.repository.RunQuestionRepository;
 import java.time.Clock;
@@ -31,6 +34,7 @@ public class AnswerTxService {
   private final AnswerRepository answerRepository;
   private final RunQuestionRepository runQuestionRepository;
   private final RunChoiceRepository runChoiceRepository;
+  private final QuizRunRepository quizRunRepository;
   /** 현재 시각을 읽는 시계. 운영은 진짜 UTC 시계, 테스트는 가짜 시계가 들어온다({@code QuizClockConfig}). */
   private final Clock clock;
 
@@ -64,6 +68,15 @@ public class AnswerTxService {
   @Transactional(readOnly = true)
   public long countAnswered(Long runQuestionId) {
     return answerRepository.countByRunQuestionId(runQuestionId);
+  }
+
+  @Transactional(readOnly = true)
+  public Optional<Long> findFullyAnsweredQuestion(Long roomId, Set<Long> onlineParticipantIds) {
+    if (onlineParticipantIds.isEmpty()) return Optional.empty();
+    return quizRunRepository.findTopByRoomIdOrderByIdDesc(roomId).filter(QuizRun::isRunning)
+        .flatMap(run -> runQuestionRepository.findFirstByQuizRunIdAndStatus(run.getId(), RunQuestionStatus.OPEN))
+        .filter(question -> hasEveryOnlineParticipantAnswered(question.getId(), onlineParticipantIds))
+        .map(RunQuestion::getId);
   }
 
   private void validateAnswerWindow(RunQuestion question, Long roomId, Instant now) {
