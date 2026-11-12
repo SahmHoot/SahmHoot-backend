@@ -154,6 +154,62 @@ class ChatMigrationIntegrationTest {
     }
   }
 
+  @Test void apiV15MessageFieldsCanBeProjectedWithOwnerComparisonAndParentLookup() throws Exception {
+    message(1, 90001, "Student question", null);
+    professorMessage(2, 90001, "Owner reply", 1L);
+    sql("""
+        INSERT INTO users(id,email,password_hash,name,role,created_at,updated_at)
+        VALUES (90003,'other-professor@test.invalid','test-only','Other professor','PROFESSOR',
+        UTC_TIMESTAMP(),UTC_TIMESTAMP())
+        """);
+    sql("""
+        INSERT INTO chat_messages(id,room_id,sender_user_id,content,created_at)
+        VALUES (3,90001,90003,'Non-owner professor','2030-01-01 00:00:00')
+        """);
+    try (var s = connection.createStatement(); var r = s.executeQuery("""
+        SELECT m.id,m.sender_participant_id,
+        CASE WHEN m.sender_participant_id IS NOT NULL THEN p.nickname ELSE u.name END AS nickname,
+        (room.host_id=m.sender_user_id) AS is_owner,m.content,m.parent_id,m.created_at,
+        parent.id AS preview_id,parent.content AS preview_content,parent.deleted_at AS preview_deleted_at
+        FROM chat_messages m JOIN rooms room ON room.id=m.room_id
+        JOIN users u ON u.id=m.sender_user_id
+        LEFT JOIN room_participants p
+          ON p.room_id=m.room_id AND p.id=m.sender_participant_id AND p.user_id=m.sender_user_id
+        LEFT JOIN chat_messages parent ON parent.room_id=m.room_id AND parent.id=m.parent_id
+        WHERE m.room_id=90001 ORDER BY m.id
+        """)) {
+      assertThat(r.next()).isTrue();
+      assertThat(r.getLong("id")).isEqualTo(1L);
+      assertThat(r.getObject("sender_participant_id", Long.class)).isEqualTo(90001L);
+      assertThat(r.getString("nickname")).isEqualTo("Anonymous");
+      assertThat(r.getBoolean("is_owner")).isFalse();
+      assertThat(r.getString("content")).isEqualTo("Student question");
+      assertThat(r.getObject("parent_id", Long.class)).isNull();
+      assertThat(r.getObject("preview_id", Long.class)).isNull();
+      assertThat(r.getObject("created_at", java.time.LocalDateTime.class))
+          .isEqualTo(java.time.LocalDateTime.of(2030, 1, 1, 0, 0));
+
+      assertThat(r.next()).isTrue();
+      assertThat(r.getLong("id")).isEqualTo(2L);
+      assertThat(r.getObject("sender_participant_id", Long.class)).isNull();
+      assertThat(r.getString("nickname")).isEqualTo("Professor");
+      assertThat(r.getBoolean("is_owner")).isTrue();
+      assertThat(r.getString("content")).isEqualTo("Owner reply");
+      assertThat(r.getObject("parent_id", Long.class)).isEqualTo(1L);
+      // Verify preview source data; response formatting and deleted-content masking belong to the API/service.
+      assertThat(r.getLong("preview_id")).isEqualTo(1L);
+      assertThat(r.getString("preview_content")).isEqualTo("Student question");
+      assertThat(r.getTimestamp("preview_deleted_at")).isNull();
+      assertThat(r.getObject("created_at", java.time.LocalDateTime.class))
+          .isEqualTo(java.time.LocalDateTime.of(2030, 1, 1, 0, 0));
+
+      assertThat(r.next()).isTrue();
+      assertThat(r.getLong("id")).isEqualTo(3L);
+      assertThat(r.getBoolean("is_owner")).as("Professor role alone does not imply room ownership").isFalse();
+      assertThat(r.next()).isFalse();
+    }
+  }
+
   @Test void messagesDoNotStoreSenderDisplaySnapshots() throws Exception {
     try (var s = connection.createStatement(); var r = s.executeQuery("""
         SELECT column_name FROM information_schema.columns
