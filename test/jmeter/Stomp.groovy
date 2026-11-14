@@ -14,7 +14,9 @@ import java.util.concurrent.TimeUnit
  * - 수신 시각은 리스너가 프레임을 다 받은 순간 기록한다(큐 대기 시간과 분리)
  * - 조각난 텍스트는 마지막 조각까지 모아 처리하고, 한 메시지에 프레임이 여러 개면 NUL로 나눈다
  * - 하트비트는 0,0으로 협상해 주고받지 않는다
- * - 기다리는 프레임이 아닌 것은 보관해 두었다가 다음 대기에서 찾는다
+ * - 기다리는 프레임이 아닌 것은 보관해 두었다가 다음 대기에서 찾는다. 단, ignore()로 지정한 구독의 MESSAGE는 보관하지 않는다
+ * - 구독마다 receipt 헤더를 붙인다. 서버는 구독이 브로커에 등록된 뒤 RECEIPT를 보낸다(SubscribeReceiptInterceptor).
+ *   RECEIPT는 등록 완료만 뜻하고, 등록 전에 발행된 메시지를 다시 보내 주지는 않는다
  * - STOMP ERROR 프레임(CONNECT 거부 등), /user/queue/errors의 ERROR 메시지, 연결 종료는 즉시 실패로 던진다
  */
 class Stomp {
@@ -49,6 +51,28 @@ class Stomp {
   WebSocket socket
   volatile String closedReason
   int nextSubscription = 0
+  /** 아직 RECEIPT를 받지 못한 receipt ID. */
+  final Set<String> pendingReceipts = new LinkedHashSet<>()
+  /** 메시지를 보관하지 않을 구독 ID(오류 검사는 한다). */
+  final Set<String> ignored = new HashSet<>()
+  private boolean disconnected
+
+  /**
+   * 프론트 roomSync.ts의 roomDestinations와 같은 방 채널 목록. 수업 화면은 이 채널을 모두 구독한다.
+   * 프론트가 바뀌면 함께 바꾼다.
+   */
+  static List<List<String>> roomDestinations(String roomId, boolean owner) {
+    List<List<String>> destinations = [
+        ['quiz', "/topic/rooms/${roomId}/quiz".toString()],
+        ['chat', "/topic/rooms/${roomId}/chat".toString()],
+        ['reaction', "/topic/rooms/${roomId}/reaction".toString()],
+        ['presence', "/topic/rooms/${roomId}/presence".toString()],
+        ['me', "/user/queue/rooms/${roomId}/me".toString()]]
+    if (owner) {
+      destinations << ['stats', "/user/queue/rooms/${roomId}/stats".toString()]
+    }
+    destinations
+  }
 
   static Stomp connect(String url, String token, long timeoutMs) {
     Stomp stomp = new Stomp()
@@ -56,13 +80,18 @@ class Stomp {
         .connectTimeout(Duration.ofMillis(timeoutMs))
         .buildAsync(URI.create(url), stomp.listener())
         .get(timeoutMs, TimeUnit.MILLISECONDS)
-    stomp.send('CONNECT', [
-        'accept-version': '1.2',
-        'host'          : URI.create(url).host,
-        'heart-beat'    : '0,0',
-        'Authorization' : "Bearer ${token}".toString()], '', timeoutMs)
-    Frame connected = stomp.await(timeoutMs) { it.command == 'CONNECTED' }
-    assert connected != null
+    try {
+      stomp.send('CONNECT', [
+          'accept-version': '1.2',
+          'host'          : URI.create(url).host,
+          'heart-beat'    : '0,0',
+          'Authorization' : "Bearer ${token}".toString()], '', timeoutMs)
+      stomp.await(timeoutMs) { it.command == 'CONNECTED' }
+    } catch (Exception e) {
+      // 호출한 쪽은 객체를 받지 못해 닫을 수 없으므로 여기서 닫는다.
+      stomp.socket.abort()
+      throw e
+    }
     stomp
   }
 
@@ -128,10 +157,46 @@ class Stomp {
     socket.sendText(frame.toString(), true).get(timeoutMs, TimeUnit.MILLISECONDS)
   }
 
+  /** 구독하고 구독 ID를 돌려준다. receipt ID는 "r-{구독 ID}"이고 awaitReceipts()로 기다린다. */
   String subscribe(String destination) {
     String id = "sub-${nextSubscription++}".toString()
-    send('SUBSCRIBE', [id: id, destination: destination], '')
+    String receipt = "r-${id}".toString()
+    pendingReceipts.add(receipt)
+    send('SUBSCRIBE', [id: id, destination: destination, receipt: receipt], '')
     id
+  }
+
+  /**
+   * 수업 화면처럼 오류 큐와 방 채널을 모두 구독하고 RECEIPT를 기다린다. 시나리오가 쓰는 quiz·stats 외 채널의 메시지는 보관하지 않는다.
+   * 구독 수와 서버의 발행 대상(채팅·반응·접속 인원)을 실제 화면과 같게 하려는 것이다.
+   */
+  void subscribeRoom(String roomId, boolean owner, long timeoutMs) {
+    subscribe('/user/queue/errors')
+    roomDestinations(roomId, owner).each { channel, destination ->
+      String id = subscribe(destination)
+      if (!(channel in ['quiz', 'stats'])) {
+        ignore(id)
+      }
+    }
+    awaitReceipts(timeoutMs)
+  }
+
+  /** 이 구독으로 오는 MESSAGE는 보관하지 않는다. 쓰지 않는 채널의 메시지가 쌓여 찾기가 느려지지 않게 한다. */
+  void ignore(String subscriptionId) {
+    ignored.add(subscriptionId)
+  }
+
+  /** 보낸 구독의 RECEIPT를 모두 받을 때까지 기다린다. 기다리는 동안 온 다른 프레임은 보관한다. */
+  void awaitReceipts(long timeoutMs) {
+    long deadline = System.currentTimeMillis() + timeoutMs
+    while (!pendingReceipts.isEmpty()) {
+      long left = deadline - System.currentTimeMillis()
+      if (left <= 0) {
+        throw new IllegalStateException("RECEIPT ${pendingReceipts.size()}개를 ${timeoutMs}ms 안에 받지 못함 ${pendingReceipts}")
+      }
+      Frame receipt = await(left) { it.command == 'RECEIPT' && pendingReceipts.contains(it.headers['receipt-id']) }
+      pendingReceipts.remove(receipt.headers['receipt-id'])
+    }
   }
 
   void sendJson(String destination, String json) {
@@ -159,8 +224,15 @@ class Stomp {
       if (match(frame)) {
         return frame
       }
-      kept.add(frame)
+      keep(frame)
     }
+  }
+
+  private void keep(Frame frame) {
+    if (frame.command == 'MESSAGE' && ignored.contains(frame.headers.subscription)) {
+      return
+    }
+    kept.add(frame)
   }
 
   /** 지금까지 받은 프레임 중 조건에 맞는 것을 모두 꺼낸다(기다리지 않음). */
@@ -168,7 +240,7 @@ class Stomp {
     Frame frame
     while ((frame = inbox.poll()) != null) {
       failOn(frame)
-      kept.add(frame)
+      keep(frame)
     }
     List<Frame> found = kept.findAll(match)
     kept.removeAll(found)
@@ -187,7 +259,12 @@ class Stomp {
     }
   }
 
+  /** 연결을 닫는다. 여러 번 불러도 한 번만 닫는다. */
   void disconnect() {
+    if (disconnected) {
+      return
+    }
+    disconnected = true
     try {
       send('DISCONNECT', [:], '', 3_000)
       socket.sendClose(WebSocket.NORMAL_CLOSURE, '').get(3, TimeUnit.SECONDS)

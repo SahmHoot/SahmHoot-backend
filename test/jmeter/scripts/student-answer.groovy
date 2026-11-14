@@ -7,3 +7,4 @@ long sentAt = System.currentTimeMillis()
 stomp.sendJson("/app/rooms/${props.get('sahm.roomId')}/answer".toString(),
     "{\"runQuestionId\":${runQuestionId},\"choiceId\":${choice}}")
 props.get('sahm.lastAnswerAt').merge(runQuestionId, sentAt, { a, b -> Math.max(a, b) })
+props.get('sahm.answerSentAt').computeIfAbsent(runQuestionId, { new java.util.concurrent.ConcurrentLinkedQueue<Long>() }).add(sentAt)

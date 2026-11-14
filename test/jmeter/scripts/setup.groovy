@@ -5,6 +5,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicInteger
 import org.apache.jmeter.services.FileServer
 
 File dir = new File(FileServer.fileServer.baseDir)
@@ -12,6 +13,12 @@ Class Stomp = new GroovyClassLoader(getClass().classLoader).parseClass(new File(
 props.put('sahm.Stomp', Stomp)
 props.put('sahm.metrics', new ConcurrentLinkedQueue())
 props.put('sahm.lastAnswerAt', new ConcurrentHashMap())
+props.put('sahm.answerSentAt', new ConcurrentHashMap())
+// 같은 JMeter 프로세스에서 다시 실행해도 이전 값이 남지 않게 실행마다 새로 만든다.
+props.put('sahm.ready', new AtomicInteger())
+props.put('sahm.failures', new AtomicInteger())
+props.remove('sahm.roomId')
+props.remove('sahm.setId')
 
 String protocol = props.getProperty('protocol', 'http')
 String host = props.getProperty('host', 'localhost')
