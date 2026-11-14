@@ -1,0 +1,268 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+<hashTree>
+<TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="SahmHoot 퀴즈 부하 시나리오 (#47)">
+  <stringProp name="TestPlan.comments">로그인 → 입장 → 구독 → 답 제출. 실행 방법은 README.md</stringProp>
+  <boolProp name="TestPlan.functional_mode">false</boolProp>
+  <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
+  <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+  <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments">
+    <collectionProp name="Arguments.arguments"/>
+  </elementProp>
+</TestPlan>
+<hashTree>
+<JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="실패 처리">
+  <stringProp name="TestPlan.comments">모든 표본에 적용. 실패하면 실패 수를 세고 WebSocket을 닫는다(남은 구독 때문에 서버가 접속 중으로 세어 조기 마감이 되지 않는 것을 막음). 스레드 그룹의 실패 동작(startnextloop 등)보다 먼저 실행된다</stringProp>
+  <stringProp name="scriptLanguage">groovy</stringProp>
+  <stringProp name="parameters"></stringProp>
+  <stringProp name="filename"></stringProp>
+  <stringProp name="cacheKey">true</stringProp>
+  <stringProp name="script">if (!prev.isSuccessful()) {
+  props.get('sahm.failures')?.incrementAndGet()
+  def stomp = vars.getObject('stomp')
+  if (stomp != null) {
+    vars.remove('stomp')
+    stomp.disconnect()
+  }
+}</stringProp>
+</JSR223PostProcessor>
+<hashTree/>
+<SetupThreadGroup guiclass="SetupThreadGroupGui" testclass="SetupThreadGroup" testname="준비">
+  <stringProp name="ThreadGroup.on_sample_error">stoptestnow</stringProp>
+  <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController">
+    <stringProp name="LoopController.loops">1</stringProp>
+    <boolProp name="LoopController.continue_forever">false</boolProp>
+  </elementProp>
+  <stringProp name="ThreadGroup.num_threads">1</stringProp>
+  <stringProp name="ThreadGroup.ramp_time">0</stringProp>
+  <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+</SetupThreadGroup>
+<hashTree>
+<JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="교수 로그인·문제 세트·방 생성">
+  <stringProp name="scriptLanguage">groovy</stringProp>
+  <stringProp name="parameters"></stringProp>
+  <stringProp name="filename">scripts/setup.groovy</stringProp>
+  <stringProp name="cacheKey">true</stringProp>
+  <stringProp name="script"></stringProp>
+</JSR223Sampler>
+<hashTree/>
+</hashTree>
+<ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="학생">
+  <stringProp name="ThreadGroup.on_sample_error">startnextloop</stringProp>
+  <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController">
+    <stringProp name="LoopController.loops">1</stringProp>
+    <boolProp name="LoopController.continue_forever">false</boolProp>
+  </elementProp>
+  <stringProp name="ThreadGroup.num_threads">${__P(users,10)}</stringProp>
+  <stringProp name="ThreadGroup.ramp_time">${__P(rampup,5)}</stringProp>
+  <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+</ThreadGroup>
+<hashTree>
+<HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="JSON">
+  <collectionProp name="HeaderManager.headers"><elementProp name="" elementType="Header"><stringProp name="Header.name">Content-Type</stringProp><stringProp name="Header.value">application/json</stringProp></elementProp></collectionProp>
+</HeaderManager>
+<hashTree/>
+<HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="학생 로그인">
+  <stringProp name="HTTPSampler.domain">${__P(host,localhost)}</stringProp>
+  <stringProp name="HTTPSampler.port">${__P(port,8080)}</stringProp>
+  <stringProp name="HTTPSampler.protocol">${__P(protocol,http)}</stringProp>
+  <stringProp name="HTTPSampler.path">/api/auth/login</stringProp>
+  <stringProp name="HTTPSampler.method">POST</stringProp>
+  <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
+  <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+  <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+  <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+    <collectionProp name="Arguments.arguments">
+      <elementProp name="" elementType="HTTPArgument">
+        <boolProp name="HTTPArgument.always_encode">false</boolProp>
+        <stringProp name="Argument.value">{"email":"${__P(studentPrefix,load)}${__threadNum}@load.test","password":${__groovy(groovy.json.JsonOutput.toJson(System.getenv('LOAD_PASSWORD')))}}</stringProp>
+        <stringProp name="Argument.metadata">=</stringProp>
+      </elementProp>
+    </collectionProp>
+  </elementProp>
+</HTTPSamplerProxy>
+<hashTree>
+<JSONPostProcessor guiclass="JSONPostProcessorGui" testclass="JSONPostProcessor" testname="토큰 추출">
+  <stringProp name="JSONPostProcessor.referenceNames">token</stringProp>
+  <stringProp name="JSONPostProcessor.jsonPathExprs">$.accessToken</stringProp>
+  <stringProp name="JSONPostProcessor.match_numbers">1</stringProp>
+  <stringProp name="JSONPostProcessor.defaultValues">NOT_FOUND</stringProp>
+</JSONPostProcessor>
+<hashTree/>
+</hashTree>
+<HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="수업 입장">
+  <stringProp name="HTTPSampler.domain">${__P(host,localhost)}</stringProp>
+  <stringProp name="HTTPSampler.port">${__P(port,8080)}</stringProp>
+  <stringProp name="HTTPSampler.protocol">${__P(protocol,http)}</stringProp>
+  <stringProp name="HTTPSampler.path">/api/rooms/by-code/${__P(sahm.joinCode)}/participants</stringProp>
+  <stringProp name="HTTPSampler.method">POST</stringProp>
+  <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
+  <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+  <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+  <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+    <collectionProp name="Arguments.arguments">
+      <elementProp name="" elementType="HTTPArgument">
+        <boolProp name="HTTPArgument.always_encode">false</boolProp>
+        <stringProp name="Argument.value">{"nickname":"부하${__threadNum}"}</stringProp>
+        <stringProp name="Argument.metadata">=</stringProp>
+      </elementProp>
+    </collectionProp>
+  </elementProp>
+</HTTPSamplerProxy>
+<hashTree>
+<HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="학생 토큰">
+  <collectionProp name="HeaderManager.headers"><elementProp name="" elementType="Header"><stringProp name="Header.name">Authorization</stringProp><stringProp name="Header.value">Bearer ${token}</stringProp></elementProp></collectionProp>
+</HeaderManager>
+<hashTree/>
+</hashTree>
+<JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="WS 연결·구독·RECEIPT">
+  <stringProp name="scriptLanguage">groovy</stringProp>
+  <stringProp name="parameters"></stringProp>
+  <stringProp name="filename">scripts/student-connect.groovy</stringProp>
+  <stringProp name="cacheKey">true</stringProp>
+  <stringProp name="script"></stringProp>
+</JSR223Sampler>
+<hashTree/>
+<JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="수업 상태 조회">
+  <stringProp name="scriptLanguage">groovy</stringProp>
+  <stringProp name="parameters"></stringProp>
+  <stringProp name="filename">scripts/student-state.groovy</stringProp>
+  <stringProp name="cacheKey">true</stringProp>
+  <stringProp name="script"></stringProp>
+</JSR223Sampler>
+<hashTree/>
+<LoopController guiclass="LoopControlPanel" testclass="LoopController" testname="문항 2개">
+  <stringProp name="LoopController.loops">2</stringProp>
+  <boolProp name="LoopController.continue_forever">true</boolProp>
+</LoopController>
+<hashTree>
+<JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="문항 열림 수신">
+  <stringProp name="scriptLanguage">groovy</stringProp>
+  <stringProp name="parameters"></stringProp>
+  <stringProp name="filename">scripts/student-open.groovy</stringProp>
+  <stringProp name="cacheKey">true</stringProp>
+  <stringProp name="script"></stringProp>
+</JSR223Sampler>
+<hashTree/>
+<JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="답 제출">
+  <stringProp name="scriptLanguage">groovy</stringProp>
+  <stringProp name="parameters"></stringProp>
+  <stringProp name="filename">scripts/student-answer.groovy</stringProp>
+  <stringProp name="cacheKey">true</stringProp>
+  <stringProp name="script"></stringProp>
+</JSR223Sampler>
+<hashTree/>
+<JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="문항 마감 수신">
+  <stringProp name="scriptLanguage">groovy</stringProp>
+  <stringProp name="parameters"></stringProp>
+  <stringProp name="filename">scripts/student-close.groovy</stringProp>
+  <stringProp name="cacheKey">true</stringProp>
+  <stringProp name="script"></stringProp>
+</JSR223Sampler>
+<hashTree/>
+</hashTree>
+<JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="결과 수신·연결 종료">
+  <stringProp name="scriptLanguage">groovy</stringProp>
+  <stringProp name="parameters"></stringProp>
+  <stringProp name="filename">scripts/student-finish.groovy</stringProp>
+  <stringProp name="cacheKey">true</stringProp>
+  <stringProp name="script"></stringProp>
+</JSR223Sampler>
+<hashTree/>
+</hashTree>
+<ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="교수">
+  <stringProp name="ThreadGroup.on_sample_error">stoptestnow</stringProp>
+  <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController">
+    <stringProp name="LoopController.loops">1</stringProp>
+    <boolProp name="LoopController.continue_forever">false</boolProp>
+  </elementProp>
+  <stringProp name="ThreadGroup.num_threads">1</stringProp>
+  <stringProp name="ThreadGroup.ramp_time">0</stringProp>
+  <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+</ThreadGroup>
+<hashTree>
+<HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="JSON">
+  <collectionProp name="HeaderManager.headers"><elementProp name="" elementType="Header"><stringProp name="Header.name">Content-Type</stringProp><stringProp name="Header.value">application/json</stringProp></elementProp></collectionProp>
+</HeaderManager>
+<hashTree/>
+<JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="교수 WS 연결·구독">
+  <stringProp name="scriptLanguage">groovy</stringProp>
+  <stringProp name="parameters"></stringProp>
+  <stringProp name="filename">scripts/professor-connect.groovy</stringProp>
+  <stringProp name="cacheKey">true</stringProp>
+  <stringProp name="script"></stringProp>
+</JSR223Sampler>
+<hashTree/>
+<JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="준비 완료 대기·접속 인원 확인">
+  <stringProp name="scriptLanguage">groovy</stringProp>
+  <stringProp name="parameters"></stringProp>
+  <stringProp name="filename">scripts/professor-ready.groovy</stringProp>
+  <stringProp name="cacheKey">true</stringProp>
+  <stringProp name="script"></stringProp>
+</JSR223Sampler>
+<hashTree/>
+<HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="퀴즈 시작">
+  <stringProp name="HTTPSampler.domain">${__P(host,localhost)}</stringProp>
+  <stringProp name="HTTPSampler.port">${__P(port,8080)}</stringProp>
+  <stringProp name="HTTPSampler.protocol">${__P(protocol,http)}</stringProp>
+  <stringProp name="HTTPSampler.path">/api/rooms/${__P(sahm.roomId)}/quiz-runs</stringProp>
+  <stringProp name="HTTPSampler.method">POST</stringProp>
+  <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
+  <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+  <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+  <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+    <collectionProp name="Arguments.arguments">
+      <elementProp name="" elementType="HTTPArgument">
+        <boolProp name="HTTPArgument.always_encode">false</boolProp>
+        <stringProp name="Argument.value">{"questionSetId":${__P(sahm.setId)}}</stringProp>
+        <stringProp name="Argument.metadata">=</stringProp>
+      </elementProp>
+    </collectionProp>
+  </elementProp>
+</HTTPSamplerProxy>
+<hashTree>
+<HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="교수 토큰">
+  <collectionProp name="HeaderManager.headers"><elementProp name="" elementType="Header"><stringProp name="Header.name">Authorization</stringProp><stringProp name="Header.value">Bearer ${__P(sahm.profToken)}</stringProp></elementProp></collectionProp>
+</HeaderManager>
+<hashTree/>
+<JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="시작 요청 시각">
+  <stringProp name="scriptLanguage">groovy</stringProp>
+  <stringProp name="parameters"></stringProp>
+  <stringProp name="filename"></stringProp>
+  <stringProp name="cacheKey">true</stringProp>
+  <stringProp name="script">props.put('sahm.startRequestedAt', System.currentTimeMillis())</stringProp>
+</JSR223PreProcessor>
+<hashTree/>
+</hashTree>
+<JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="응답 수·결과 확인">
+  <stringProp name="scriptLanguage">groovy</stringProp>
+  <stringProp name="parameters"></stringProp>
+  <stringProp name="filename">scripts/professor-verify.groovy</stringProp>
+  <stringProp name="cacheKey">true</stringProp>
+  <stringProp name="script"></stringProp>
+</JSR223Sampler>
+<hashTree/>
+</hashTree>
+<PostThreadGroup guiclass="PostThreadGroupGui" testclass="PostThreadGroup" testname="정리">
+  <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+  <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController">
+    <stringProp name="LoopController.loops">1</stringProp>
+    <boolProp name="LoopController.continue_forever">false</boolProp>
+  </elementProp>
+  <stringProp name="ThreadGroup.num_threads">1</stringProp>
+  <stringProp name="ThreadGroup.ramp_time">0</stringProp>
+  <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+</PostThreadGroup>
+<hashTree>
+<JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="방 종료·지표 요약">
+  <stringProp name="scriptLanguage">groovy</stringProp>
+  <stringProp name="parameters"></stringProp>
+  <stringProp name="filename">scripts/teardown.groovy</stringProp>
+  <stringProp name="cacheKey">true</stringProp>
+  <stringProp name="script"></stringProp>
+</JSR223Sampler>
+<hashTree/>
+</hashTree>
+</hashTree>
+</hashTree>
+</jmeterTestPlan>

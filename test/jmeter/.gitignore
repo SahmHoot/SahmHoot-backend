@@ -1,0 +1,6 @@
+# 실행 결과·계정 SQL은 커밋하지 않는다
+*.jtl
+*.log
+*.csv
+report/
+accounts.sql
