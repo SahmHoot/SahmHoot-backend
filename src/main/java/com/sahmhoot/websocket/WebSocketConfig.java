@@ -18,7 +18,7 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
  *
  * <p>구독: /topic/rooms/{roomId}/..., /user/queue/... · 전송: /app/rooms/{roomId}/...
  *
- * <p>인바운드 인터셉터는 권한 검사 → 접속 추적(#65) 순서다.
+ * <p>인바운드 인터셉터는 권한 검사 → 접속 추적(#65) 순서이고, receipt 헤더가 있는 구독에는 등록 뒤 RECEIPT를 보낸다(#64).
  */
 @Configuration
 @EnableWebSocketMessageBroker
@@ -27,6 +27,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
   private final StompAuthChannelInterceptor authInterceptor;
   private final RoomPresenceInterceptor presenceInterceptor;
+  private final SubscribeReceiptInterceptor subscribeReceiptInterceptor;
 
   @Value("${app.cors.allowed-origins:}")
   private List<String> allowedOrigins;
@@ -46,12 +47,15 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     registry.setApplicationDestinationPrefixes("/app");
     registry.setUserDestinationPrefix("/user");
     registry.setPreservePublishOrder(true);
+    // /user 구독은 브로커 채널에서 등록되므로 구독 RECEIPT 인터셉터를 여기에도 건다(#64).
+    registry.configureBrokerChannel().interceptors(subscribeReceiptInterceptor);
   }
 
   @Override
   public void configureClientInboundChannel(ChannelRegistration registration) {
     // 순서 유지: 권한 검사에서 거부(null)된 프레임은 접속 추적까지 가지 않는다.
-    registration.interceptors(authInterceptor, presenceInterceptor);
+    // 구독 RECEIPT는 단순 브로커가 구독을 등록한 뒤(afterMessageHandled)에 보낸다.
+    registration.interceptors(authInterceptor, presenceInterceptor, subscribeReceiptInterceptor);
   }
 
   @Bean
