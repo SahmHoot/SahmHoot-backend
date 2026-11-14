@@ -37,6 +37,20 @@ jobs:
           --health-timeout=5s
           --health-retries=20
 
+      # V1 → V2 검증은 빈 스키마가 필요하므로 기존 테스트 DB와 컨테이너를 분리한다.
+      chat-mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: chat_migration_test
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+        ports:
+          - 3306/tcp
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
     steps:
       - uses: actions/checkout@v7
 
@@ -48,6 +62,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
 
       - name: 빌드·테스트
+        env:
+          CHAT_MIGRATION_DB_URL: jdbc:mysql://127.0.0.1:${{ job.services.chat-mysql.ports[3306] }}/chat_migration_test?characterEncoding=UTF-8&connectionTimeZone=UTC
+          CHAT_MIGRATION_DB_USERNAME: root
+          CHAT_MIGRATION_DB_PASSWORD: ''
         run: ./gradlew build
 
       # 실패했을 때만 원인을 볼 수 있게 테스트 리포트를 남긴다

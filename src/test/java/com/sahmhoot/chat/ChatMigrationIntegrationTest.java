@@ -16,9 +16,17 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 class ChatMigrationIntegrationTest {
   private Connection connection;
 
+  private static String username() {
+    return System.getenv().getOrDefault("CHAT_MIGRATION_DB_USERNAME", System.getenv("DB_USERNAME"));
+  }
+
+  private static String password() {
+    return System.getenv().getOrDefault("CHAT_MIGRATION_DB_PASSWORD", System.getenv("DB_PASSWORD"));
+  }
+
   private static Connection connect() throws SQLException {
     return DriverManager.getConnection(System.getenv("CHAT_MIGRATION_DB_URL"),
-        System.getenv("DB_USERNAME"), System.getenv("DB_PASSWORD"));
+        username(), password());
   }
 
   @BeforeAll static void upgradeExistingV1WithoutChangingData() throws Exception {
@@ -30,7 +38,7 @@ class ChatMigrationIntegrationTest {
       }
     }
     var configuration = Flyway.configure().dataSource(System.getenv("CHAT_MIGRATION_DB_URL"),
-        System.getenv("DB_USERNAME"), System.getenv("DB_PASSWORD"));
+        username(), password());
     configuration.target("1").load().migrate();
     try (var c = connect(); var s = c.createStatement()) {
       s.executeUpdate("""
@@ -67,8 +75,8 @@ class ChatMigrationIntegrationTest {
       s.executeUpdate("DELETE FROM room_participants WHERE id=80000");
       s.executeUpdate("DELETE FROM rooms WHERE id=80000");
       s.executeUpdate("DELETE FROM users WHERE id = 80000"); // Only this test's fixture.
-      // DDL runs before transactional fixtures: neither index can be dropped with these FKs.
-      for (String index : List.of("uq_room_participants_chat_room_id", "uq_room_participants_chat_sender")) {
+      // DDL runs before transactional fixtures: the participant index cannot be dropped with these FKs.
+      for (String index : List.of("uq_room_participants_chat_room_id")) {
         assertThatThrownBy(() -> s.executeUpdate("ALTER TABLE room_participants DROP INDEX " + index))
             .isInstanceOfSatisfying(SQLException.class,
                 error -> assertThat(error.getErrorCode()).isEqualTo(1553));
@@ -104,110 +112,84 @@ class ChatMigrationIntegrationTest {
 
   @Test void professorHostAndStudentCanBothStoreMessagesDuringClass() throws Exception {
     sql("UPDATE rooms SET status='PLAYING' WHERE id=90001");
-    // CH-01: a professor host has no room_participants row, but can still send chat.
-    sql("""
-        INSERT INTO chat_messages(id,room_id,sender_user_id,
-        content,created_at) VALUES (1,90001,90001,'Welcome',UTC_TIMESTAMP(6))
-        """);
+    professorMessage(1, 90001, "Welcome", null);
     message(2, 90001, "Student message", null);
-    try (var s = connection.createStatement(); var r = s.executeQuery("""
-        SELECT m.sender_user_id,u.role FROM chat_messages m
-        JOIN users u ON u.id=m.sender_user_id WHERE m.room_id=90001 ORDER BY m.id
+    assertThat(count("chat_messages")).isEqualTo(2);
+    try (var st = connection.createStatement(); var r = st.executeQuery("""
+        SELECT p.user_id FROM chat_messages m JOIN room_participants p
+        ON p.room_id=m.room_id AND p.id=m.sender_participant_id ORDER BY m.id
         """)) {
       assertThat(r.next()).isTrue();
       assertThat(r.getLong(1)).isEqualTo(90001L);
-      assertThat(r.getString(2)).isEqualTo("PROFESSOR");
       assertThat(r.next()).isTrue();
       assertThat(r.getLong(1)).isEqualTo(90002L);
-      assertThat(r.getString(2)).isEqualTo("STUDENT");
       assertThat(r.next()).isFalse();
     }
   }
 
-  @Test void displayDataComesFromParticipantNicknameAndUserNameAndRole() throws Exception {
-    // CH-02: nickname stays fixed during class; account names are resolved when reading.
-    sql("""
-        INSERT INTO chat_messages(id,room_id,sender_user_id,sender_participant_id,content,created_at)
-        SELECT 1,p.room_id,u.id,p.id,'Student message',UTC_TIMESTAMP(6)
-        FROM room_participants p JOIN users u ON u.id=p.user_id WHERE p.id=90001
-        """);
-    sql("""
-        INSERT INTO chat_messages(id,room_id,sender_user_id,content,created_at)
-        SELECT 2,r.id,u.id,'Professor message',UTC_TIMESTAMP(6)
-        FROM rooms r JOIN users u ON u.id=r.host_id WHERE r.id=90001
-        """);
-    sql("UPDATE users SET name='Changed name' WHERE id IN (90001,90002)");
-    try (var s = connection.createStatement(); var r = s.executeQuery("""
-        SELECT CASE WHEN u.role='STUDENT' THEN p.nickname ELSE u.name END AS display_name,u.role
-        FROM chat_messages m JOIN users u ON u.id=m.sender_user_id
-        LEFT JOIN room_participants p
-          ON p.room_id=m.room_id AND p.id=m.sender_participant_id AND p.user_id=m.sender_user_id
-        WHERE m.room_id=90001 ORDER BY m.id
-        """)) {
-      assertThat(r.next()).isTrue();
-      assertThat(r.getString(1)).isEqualTo("Anonymous");
-      assertThat(r.getString(2)).isEqualTo("STUDENT");
-      assertThat(r.next()).isTrue();
-      assertThat(r.getString(1)).isEqualTo("Changed name");
-      assertThat(r.getString(2)).isEqualTo("PROFESSOR"); // Badge comes from role, not display text.
-      assertThat(r.next()).isFalse();
-    }
-  }
-
-  @Test void apiV15MessageFieldsCanBeProjectedWithOwnerComparisonAndParentLookup() throws Exception {
+  @Test void displayAndEmailUseParticipantsIncludingNonOwnerProfessors() throws Exception {
     message(1, 90001, "Student question", null);
     professorMessage(2, 90001, "Owner reply", 1L);
     sql("""
         INSERT INTO users(id,email,password_hash,name,role,created_at,updated_at)
-        VALUES (90003,'other-professor@test.invalid','test-only','Other professor','PROFESSOR',
+        VALUES (90003,'other-professor@test.invalid','test-only','Account name','PROFESSOR',
         UTC_TIMESTAMP(),UTC_TIMESTAMP())
         """);
     sql("""
-        INSERT INTO chat_messages(id,room_id,sender_user_id,content,created_at)
-        VALUES (3,90001,90003,'Non-owner professor','2030-01-01 00:00:00')
+        INSERT INTO room_participants(id,room_id,user_id,nickname,joined_at)
+        VALUES (90003,90001,90003,'Guest nickname',UTC_TIMESTAMP())
         """);
-    try (var s = connection.createStatement(); var r = s.executeQuery("""
-        SELECT m.id,m.sender_participant_id,
-        CASE WHEN m.sender_participant_id IS NOT NULL THEN p.nickname ELSE u.name END AS nickname,
-        (room.host_id=m.sender_user_id) AS is_owner,m.content,m.parent_id,m.created_at,
-        parent.id AS preview_id,parent.content AS preview_content,parent.deleted_at AS preview_deleted_at
+    sql("""
+        INSERT INTO chat_messages(id,room_id,sender_participant_id,content,created_at)
+        VALUES (3,90001,90003,'Guest professor','2030-01-01 00:00:00')
+        """);
+    sql("UPDATE users SET name='Changed account name' WHERE id IN (90001,90002,90003)");
+    try (var st = connection.createStatement(); var r = st.executeQuery("""
+        SELECT m.id,p.nickname,(p.user_id=room.host_id) AS is_owner,u.email,
+        m.parent_id,parent.content AS parent_content
         FROM chat_messages m JOIN rooms room ON room.id=m.room_id
-        JOIN users u ON u.id=m.sender_user_id
-        LEFT JOIN room_participants p
-          ON p.room_id=m.room_id AND p.id=m.sender_participant_id AND p.user_id=m.sender_user_id
+        JOIN room_participants p ON p.room_id=m.room_id AND p.id=m.sender_participant_id
+        JOIN users u ON u.id=p.user_id
         LEFT JOIN chat_messages parent ON parent.room_id=m.room_id AND parent.id=m.parent_id
-        WHERE m.room_id=90001 ORDER BY m.id
+        ORDER BY m.id
         """)) {
       assertThat(r.next()).isTrue();
-      assertThat(r.getLong("id")).isEqualTo(1L);
-      assertThat(r.getObject("sender_participant_id", Long.class)).isEqualTo(90001L);
       assertThat(r.getString("nickname")).isEqualTo("Anonymous");
       assertThat(r.getBoolean("is_owner")).isFalse();
-      assertThat(r.getString("content")).isEqualTo("Student question");
-      assertThat(r.getObject("parent_id", Long.class)).isNull();
-      assertThat(r.getObject("preview_id", Long.class)).isNull();
-      assertThat(r.getObject("created_at", java.time.LocalDateTime.class))
-          .isEqualTo(java.time.LocalDateTime.of(2030, 1, 1, 0, 0));
-
+      assertThat(r.getString("email")).isEqualTo("student@test.invalid");
+      assertThat(r.getObject("parent_id")).isNull();
       assertThat(r.next()).isTrue();
-      assertThat(r.getLong("id")).isEqualTo(2L);
-      assertThat(r.getObject("sender_participant_id", Long.class)).isNull();
-      assertThat(r.getString("nickname")).isEqualTo("Professor");
+      assertThat(r.getString("nickname")).isEqualTo("Owner nickname");
       assertThat(r.getBoolean("is_owner")).isTrue();
-      assertThat(r.getString("content")).isEqualTo("Owner reply");
-      assertThat(r.getObject("parent_id", Long.class)).isEqualTo(1L);
-      // Verify preview source data; response formatting and deleted-content masking belong to the API/service.
-      assertThat(r.getLong("preview_id")).isEqualTo(1L);
-      assertThat(r.getString("preview_content")).isEqualTo("Student question");
-      assertThat(r.getTimestamp("preview_deleted_at")).isNull();
-      assertThat(r.getObject("created_at", java.time.LocalDateTime.class))
-          .isEqualTo(java.time.LocalDateTime.of(2030, 1, 1, 0, 0));
-
+      assertThat(r.getString("email")).isEqualTo("professor@test.invalid");
+      assertThat(r.getLong("parent_id")).isEqualTo(1L);
+      assertThat(r.getString("parent_content")).isEqualTo("Student question");
       assertThat(r.next()).isTrue();
-      assertThat(r.getLong("id")).isEqualTo(3L);
-      assertThat(r.getBoolean("is_owner")).as("Professor role alone does not imply room ownership").isFalse();
+      assertThat(r.getString("nickname")).isEqualTo("Guest nickname");
+      assertThat(r.getBoolean("is_owner")).isFalse();
+      assertThat(r.getString("email")).isEqualTo("other-professor@test.invalid");
       assertThat(r.next()).isFalse();
     }
+  }
+
+  @Test void nonParticipantsCannotCreateMessagesAndParticipantIsRequired() throws Exception {
+    // A valid user account alone is insufficient; it has no participant row yet.
+    rejected(() -> sql("""
+        INSERT INTO chat_messages(room_id,sender_participant_id,content,created_at)
+        VALUES (90001,90002,'Not a participant',UTC_TIMESTAMP(6))
+        """));
+    rejected(() -> sql("""
+        INSERT INTO chat_messages(room_id,sender_participant_id,content,created_at)
+        VALUES (90001,NULL,'Missing participant',UTC_TIMESTAMP(6))
+        """));
+    message(1, 90001, "Valid", null);
+    rejected(() -> sql("UPDATE chat_messages SET sender_participant_id=NULL WHERE id=1"));
+    sql("""
+        INSERT INTO room_participants(id,room_id,user_id,nickname,joined_at)
+        VALUES (90002,90002,90002,'Other room',UTC_TIMESTAMP())
+        """);
+    rejected(() -> sql("UPDATE chat_messages SET sender_participant_id=90002 WHERE id=1"));
+    assertThat(count("chat_messages")).isEqualTo(1);
   }
 
   @Test void messagesDoNotStoreSenderDisplaySnapshots() throws Exception {
@@ -217,7 +199,7 @@ class ChatMigrationIntegrationTest {
         """)) {
       var columns = new ArrayList<String>();
       while (r.next()) columns.add(r.getString(1));
-      assertThat(columns).containsExactly("id", "room_id", "sender_user_id", "sender_participant_id",
+      assertThat(columns).containsExactly("id", "room_id", "sender_participant_id",
           "content", "parent_id", "created_at", "deleted_at");
     }
     try (var s = connection.createStatement(); var r = s.executeQuery("""
@@ -230,10 +212,9 @@ class ChatMigrationIntegrationTest {
     }
   }
 
-  @Test void studentParticipationMustMatchTheMessageRoomAndAccount() throws Exception {
+  @Test void participationMustMatchTheMessageRoom() throws Exception {
     message(1, 90001, "Student message", null);
     professorMessage(2, 90001, "Professor message", null);
-    rejected(() -> sql("UPDATE chat_messages SET sender_user_id=90001 WHERE id=1"));
     rejected(() -> sql("UPDATE chat_messages SET room_id=90002 WHERE id=1"));
     rejected(() -> sql("UPDATE chat_messages SET sender_participant_id=99999 WHERE id=1"));
     try (var s = connection.createStatement(); var r = s.executeQuery("""
@@ -242,7 +223,7 @@ class ChatMigrationIntegrationTest {
       assertThat(r.next()).isTrue();
       assertThat(r.getObject(1, Long.class)).isEqualTo(90001L);
       assertThat(r.next()).isTrue();
-      assertThat(r.getObject(1, Long.class)).isNull();
+      assertThat(r.getObject(1, Long.class)).isEqualTo(190001L);
     }
   }
 
@@ -255,7 +236,7 @@ class ChatMigrationIntegrationTest {
     assertThat(indexColumns("room_participants", "uq_room_participants_chat_room_id"))
         .containsExactly("room_id", "id");
     assertThat(indexColumns("room_participants", "uq_room_participants_chat_sender"))
-        .containsExactly("room_id", "id", "user_id");
+        .isEmpty();
     try (var s = connection.createStatement(); var r = s.executeQuery("""
         SELECT constraint_name,unique_constraint_name FROM information_schema.referential_constraints
         WHERE constraint_schema=DATABASE()
@@ -264,7 +245,7 @@ class ChatMigrationIntegrationTest {
         """)) {
       assertThat(r.next()).isTrue();
       assertThat(r.getString(1)).isEqualTo("fk_chat_message_participant");
-      assertThat(r.getString(2)).isEqualTo("uq_room_participants_chat_sender");
+      assertThat(r.getString(2)).isEqualTo("uq_room_participants_chat_room_id");
       assertThat(r.next()).isTrue();
       assertThat(r.getString(1)).isEqualTo("fk_chat_restriction_participant");
       assertThat(r.getString(2)).isEqualTo("uq_room_participants_chat_room_id");
@@ -328,20 +309,17 @@ class ChatMigrationIntegrationTest {
         var recentIds = new ArrayList<Long>();
         try (var s = restored.prepareStatement("""
             SELECT id,CASE WHEN deleted_at IS NULL THEN content ELSE NULL END AS content,deleted_at
-            FROM chat_messages WHERE room_id=? ORDER BY created_at DESC,id DESC LIMIT 50
+            FROM chat_messages WHERE room_id=? AND deleted_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 50
             """)) {
           s.setLong(1, 90001L);
           try (var r = s.executeQuery()) {
             while (r.next()) {
               recentIds.add(r.getLong("id"));
-              if (r.getLong("id") == 50) {
-                assertThat(r.getString("content")).isNull();
-                assertThat(r.getObject("deleted_at")).isNotNull();
-              }
             }
           }
         }
-        assertThat(recentIds).hasSize(50).startsWith(60L, 59L).endsWith(11L);
+        assertThat(recentIds).hasSize(50).startsWith(60L, 59L).endsWith(10L).doesNotContain(50L, 61L);
+        assertThat(count(restored, "chat_messages")).isEqualTo(61);
         var pinnedIds = new ArrayList<Long>();
         try (var s = restored.prepareStatement("""
             SELECT m.id FROM chat_pins p JOIN chat_messages m
@@ -459,7 +437,7 @@ class ChatMigrationIntegrationTest {
     } finally {
       // Only fixtures from this opt-in disposable schema test are committed/deleted.
       sql("DELETE FROM chat_restrictions WHERE room_id=90001 AND participant_id=90001");
-      sql("DELETE FROM room_participants WHERE id=90001");
+      sql("DELETE FROM room_participants WHERE room_id IN (90001,90002)");
       sql("DELETE FROM rooms WHERE id IN (90001,90002)");
       sql("DELETE FROM users WHERE id IN (90001,90002)");
       connection.commit();
@@ -472,7 +450,7 @@ class ChatMigrationIntegrationTest {
     rejected(() -> sql("DELETE FROM rooms WHERE id=90001"));
     sql("INSERT INTO chat_restrictions VALUES (90001,90001,90001,UTC_TIMESTAMP())");
     rejected(() -> sql("DELETE FROM room_participants WHERE id=90001"));
-    rejected(() -> sql("UPDATE chat_messages SET sender_user_id=99999 WHERE id=1"));
+    rejected(() -> sql("UPDATE chat_messages SET sender_participant_id=99999 WHERE id=1"));
     rejected(() -> sql("UPDATE chat_messages SET room_id=99999 WHERE id=1"));
   }
 
@@ -528,17 +506,16 @@ class ChatMigrationIntegrationTest {
   @Test void ordinaryProjectionContainsOnlyAnonymousDisplayData() throws Exception {
     message(1, 90001, "Hello", null);
     try (var s = connection.createStatement(); var r = s.executeQuery("""
-        SELECT m.id,m.room_id,CASE WHEN u.role='STUDENT' THEN p.nickname ELSE u.name END AS display_name,u.role,
+        SELECT m.id,m.room_id,p.nickname AS display_name,(p.user_id=room.host_id) AS is_owner,
         CASE WHEN m.deleted_at IS NULL THEN m.content ELSE NULL END AS content,
         m.parent_id,m.created_at,m.deleted_at
-        FROM chat_messages m JOIN users u ON u.id=m.sender_user_id
-        LEFT JOIN room_participants p
-          ON p.room_id=m.room_id AND p.id=m.sender_participant_id AND p.user_id=m.sender_user_id
-        WHERE m.room_id=90001 ORDER BY m.created_at DESC,m.id DESC LIMIT 50
+        FROM chat_messages m JOIN rooms room ON room.id=m.room_id
+        JOIN room_participants p ON p.room_id=m.room_id AND p.id=m.sender_participant_id
+        WHERE m.room_id=90001 AND m.deleted_at IS NULL ORDER BY m.created_at DESC,m.id DESC LIMIT 50
         """)) {
       assertThat(r.next()).isTrue();
       assertThat(r.getString("display_name")).isEqualTo("Anonymous");
-      assertThat(r.getString("role")).isEqualTo("STUDENT");
+      assertThat(r.getBoolean("is_owner")).isFalse();
     }
     try (var s = connection.createStatement(); var r = s.executeQuery("""
         SELECT column_name FROM information_schema.columns
@@ -551,12 +528,11 @@ class ChatMigrationIntegrationTest {
   @Test void authorEmailCanBeResolvedSeparatelyThroughTheSenderForeignKey() throws Exception {
     // CH-03 persistence contract only: professor authorization belongs to the future service/API.
     message(1, 90001, "Student message", null);
-    sql("""
-        INSERT INTO chat_messages(id,room_id,sender_user_id,content,created_at)
-        SELECT 2,90001,id,'Professor message',UTC_TIMESTAMP(6) FROM users WHERE id=90001
-        """);
+    professorMessage(2, 90001, "Professor message", null);
     try (var s = connection.prepareStatement("""
-        SELECT m.id,u.email FROM chat_messages m JOIN users u ON u.id=m.sender_user_id
+        SELECT m.id,u.email FROM chat_messages m
+        JOIN room_participants p ON p.room_id=m.room_id AND p.id=m.sender_participant_id
+        JOIN users u ON u.id=p.user_id
         WHERE m.room_id=? ORDER BY m.id
         """)) {
       s.setLong(1, 90001L);
@@ -661,7 +637,7 @@ class ChatMigrationIntegrationTest {
     assertThat(count("chat_messages")).isEqualTo(3);
     assertThat(count("chat_restrictions")).isEqualTo(3);
     assertThat(count("rooms")).isEqualTo(5);
-    assertThat(count("room_participants")).isEqualTo(5);
+    assertThat(count("room_participants")).isEqualTo(10);
   }
 
   private String explainKey(String query) throws SQLException {
@@ -686,9 +662,9 @@ class ChatMigrationIntegrationTest {
 
   private void message(long id, long room, String content, Long reply) throws SQLException {
     try (var s = connection.prepareStatement("""
-        INSERT INTO chat_messages(id,room_id,sender_user_id,sender_participant_id,
+        INSERT INTO chat_messages(id,room_id,sender_participant_id,
         content,parent_id,created_at)
-        SELECT ?,p.room_id,p.user_id,p.id,?,?,'2030-01-01 00:00:00'
+        SELECT ?,p.room_id,p.id,?,?,'2030-01-01 00:00:00'
         FROM room_participants p WHERE p.room_id=? AND p.user_id=90002
         """)) {
       s.setLong(1, id);
@@ -701,13 +677,24 @@ class ChatMigrationIntegrationTest {
 
   private void professorMessage(long id, long room, String content, Long reply) throws SQLException {
     try (var s = connection.prepareStatement("""
-        INSERT INTO chat_messages(id,room_id,sender_user_id,
-        content,parent_id,created_at) VALUES (?, ?, 90001, ?, ?, '2030-01-01 00:00:00')
+        INSERT INTO room_participants(id,room_id,user_id,nickname,joined_at)
+        SELECT ?,r.id,r.host_id,'Owner nickname',UTC_TIMESTAMP() FROM rooms r
+        WHERE r.id=? AND NOT EXISTS (
+          SELECT 1 FROM room_participants p WHERE p.room_id=r.id AND p.user_id=r.host_id)
+        """)) {
+      s.setLong(1, 100000 + room);
+      s.setLong(2, room);
+      s.executeUpdate();
+    }
+    try (var s = connection.prepareStatement("""
+        INSERT INTO chat_messages(id,room_id,sender_participant_id,content,parent_id,created_at)
+        VALUES (?, ?, ?, ?, ?, '2030-01-01 00:00:00')
         """)) {
       s.setLong(1, id);
       s.setLong(2, room);
-      s.setString(3, content);
-      s.setObject(4, reply);
+      s.setLong(3, 100000 + room);
+      s.setString(4, content);
+      s.setObject(5, reply);
       s.executeUpdate();
     }
   }

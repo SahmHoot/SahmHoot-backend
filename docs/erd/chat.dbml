@@ -26,7 +26,7 @@ Table users {
   created_at datetime [not null]
   updated_at datetime [not null]
 
-  Note: '교수 및 학생 사용자 계정. 작성자 역할은 role, 교수 표시 이름은 name으로 조회한다.'
+  Note: '교수 및 학생 사용자 계정. 채팅 작성자 이메일은 참가자의 user_id를 통해 조회한다.'
 }
 
 Table rooms {
@@ -57,17 +57,15 @@ Table room_participants {
     (room_id, user_id) [unique, name: 'room_participants_index_2']
     (room_id, nickname) [unique, name: 'room_participants_index_3']
     (room_id, id) [unique, name: 'uq_room_participants_chat_room_id']
-    (room_id, id, user_id) [unique, name: 'uq_room_participants_chat_sender']
   }
 
-  Note: '학생 계정과 수업방별 익명 닉네임을 매핑하는 참가 정보. 수업 중 닉네임 변경 금지는 백엔드에서 검증한다.'
+  Note: '교수와 학생 모두의 계정과 수업방별 닉네임을 매핑하는 참가 정보. 수업 중 닉네임 변경 금지는 백엔드에서 검증한다.'
 }
 
 Table chat_messages {
   id bigint [pk, increment, not null]
   room_id bigint [not null]
-  sender_user_id bigint [not null, note: '실제 작성자 계정 ID']
-  sender_participant_id bigint [null, note: '학생 참가자 ID, 교수 발신 시 NULL']
+  sender_participant_id bigint [not null, note: '교수 및 학생 발신자의 방 참가자 ID']
   content varchar(300) [not null]
   parent_id bigint [null, note: '답글 원본 메시지 ID']
   created_at datetime(6) [not null]
@@ -83,7 +81,7 @@ Table chat_messages {
     `CHAR_LENGTH(content) BETWEEN 1 AND 300` [name: 'ck_chat_message_content']
   }
 
-  Note: '수업방 채팅 메시지. 학생 닉네임은 room_participants.nickname, 교수 표시 이름은 users.name, 역할은 users.role로 조회한다. 학생의 sender_participant_id 필수 및 계정·참가자 일치는 백엔드에서 검증한다.'
+  Note: '수업방 채팅 메시지. 닉네임은 항상 room_participants.nickname, isOwner는 참가자 user_id = rooms.host_id로 판정한다. 인증 사용자와 참가자의 user_id 일치는 백엔드에서 검증한다. recentMessages는 deleted_at IS NULL인 최근 50건이다.'
 }
 
 Table chat_pins {
@@ -96,7 +94,7 @@ Table chat_pins {
     (room_id, message_id) [pk]
   }
 
-  Note: '수업방별 현재 고정 메시지'
+  Note: '수업방별 다중 고정 메시지. 최대 개수 제한 없이 메시지별 고정 및 해제 가능'
 }
 
 Table chat_restrictions {
@@ -117,8 +115,7 @@ Ref: room_participants.room_id > rooms.id [delete: restrict, update: restrict]
 Ref: room_participants.user_id > users.id [delete: restrict, update: restrict]
 
 Ref fk_chat_message_room: chat_messages.room_id > rooms.id [delete: restrict, update: restrict]
-Ref fk_chat_message_sender: chat_messages.sender_user_id > users.id [delete: restrict, update: restrict]
-Ref fk_chat_message_participant: chat_messages.(room_id, sender_participant_id, sender_user_id) > room_participants.(room_id, id, user_id) [delete: restrict, update: restrict]
+Ref fk_chat_message_participant: chat_messages.(room_id, sender_participant_id) > room_participants.(room_id, id) [delete: restrict, update: restrict]
 Ref fk_chat_message_parent: chat_messages.(room_id, parent_id) > chat_messages.(room_id, id) [delete: restrict, update: restrict]
 Ref fk_chat_pin_message: chat_pins.(room_id, message_id) > chat_messages.(room_id, id) [delete: cascade, update: restrict]
 Ref fk_chat_pin_actor: chat_pins.pinned_by_user_id > users.id [delete: restrict, update: restrict]

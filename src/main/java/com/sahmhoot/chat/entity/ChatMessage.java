@@ -15,9 +15,7 @@ public class ChatMessage {
   private Long id;
   @Column(name = "room_id", nullable = false)
   private Long roomId;
-  @Column(name = "sender_user_id", nullable = false)
-  private Long senderUserId;
-  @Column(name = "sender_participant_id")
+  @Column(name = "sender_participant_id", nullable = false)
   private Long senderParticipantId;
   @Column(nullable = false, length = 300)
   private String content;
@@ -28,10 +26,9 @@ public class ChatMessage {
   @Column(name = "deleted_at")
   private Instant deletedAt;
 
-  public ChatMessage(Long roomId, Long senderUserId, Long senderParticipantId,
+  public ChatMessage(Long roomId, Long senderParticipantId,
       String content, Long parentId, Instant createdAt) {
     this.roomId = roomId;
-    this.senderUserId = senderUserId;
     this.senderParticipantId = senderParticipantId;
     this.content = content;
     this.parentId = parentId;

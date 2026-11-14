@@ -30,6 +30,7 @@ class ChatEntityMappingIntegrationTest {
   private Long studentId;
   private Long roomId;
   private Long participantId;
+  private Long ownerParticipantId;
 
   @BeforeEach
   void setup() {
@@ -45,29 +46,32 @@ class ChatEntityMappingIntegrationTest {
     var participant = new RoomParticipant(roomId, studentId, "Anonymous");
     em.persist(participant);
     participantId = participant.getId();
+    var owner = new RoomParticipant(roomId, professorId, "Owner nickname");
+    em.persist(owner);
+    ownerParticipantId = owner.getId();
     em.flush();
   }
 
   @Test
   void messagesRoundTripGeneratedIdsNullableFieldsRepliesAndMicrosecondTimes() {
-    var student = new ChatMessage(roomId, studentId, participantId, "질문😀", null, TIME);
+    var student = new ChatMessage(roomId, participantId, "질문😀", null, TIME);
     em.persist(student);
-    var professor = new ChatMessage(roomId, professorId, null, "답변", student.getId(), TIME.plusSeconds(1));
+    var professor = new ChatMessage(roomId, ownerParticipantId, "답변", student.getId(), TIME.plusSeconds(1));
     em.persist(professor);
     em.flush();
     em.clear();
 
     assertThat(student.getId()).isPositive();
     var storedStudent = em.find(ChatMessage.class, student.getId());
-    assertThat(storedStudent).extracting(ChatMessage::getRoomId, ChatMessage::getSenderUserId,
+    assertThat(storedStudent).extracting(ChatMessage::getRoomId,
         ChatMessage::getSenderParticipantId, ChatMessage::getContent, ChatMessage::getParentId,
         ChatMessage::getCreatedAt, ChatMessage::getDeletedAt)
-        .containsExactly(roomId, studentId, participantId, "질문😀", null, TIME, null);
+        .containsExactly(roomId, participantId, "질문😀", null, TIME, null);
     var storedProfessor = em.find(ChatMessage.class, professor.getId());
-    assertThat(storedProfessor).extracting(ChatMessage::getRoomId, ChatMessage::getSenderUserId,
+    assertThat(storedProfessor).extracting(ChatMessage::getRoomId,
         ChatMessage::getSenderParticipantId, ChatMessage::getContent, ChatMessage::getParentId,
         ChatMessage::getCreatedAt, ChatMessage::getDeletedAt)
-        .containsExactly(roomId, professorId, null, "답변", student.getId(), TIME.plusSeconds(1), null);
+        .containsExactly(roomId, ownerParticipantId, "답변", student.getId(), TIME.plusSeconds(1), null);
 
     // Existing soft-deleted rows must also be readable; deletion policy belongs to the service.
     jdbc.update("UPDATE chat_messages SET deleted_at = ? WHERE id = ?", Timestamp.from(TIME.plusSeconds(2)), student.getId());
@@ -76,9 +80,26 @@ class ChatEntityMappingIntegrationTest {
   }
 
   @Test
+  void nonOwnerProfessorUsesTheirParticipantNickname() {
+    var guest = User.create(UUID.randomUUID() + "@test.invalid", "test-only", "Account name", null, Role.PROFESSOR);
+    em.persist(guest);
+    var participant = new RoomParticipant(roomId, guest.getId(), "Guest nickname");
+    em.persist(participant);
+    var message = new ChatMessage(roomId, participant.getId(), "Guest message", null, TIME);
+    em.persist(message);
+    em.flush();
+    em.clear();
+
+    var stored = em.find(ChatMessage.class, message.getId());
+    var sender = em.find(RoomParticipant.class, stored.getSenderParticipantId());
+    assertThat(sender.getNickname()).isEqualTo("Guest nickname");
+    assertThat(sender.getUserId()).isEqualTo(guest.getId()).isNotEqualTo(professorId);
+  }
+
+  @Test
   void pinsRoundTripCompositeKeysAndCanBeRemovedIndependently() {
-    var first = new ChatMessage(roomId, professorId, null, "First", null, TIME);
-    var second = new ChatMessage(roomId, professorId, null, "Second", null, TIME);
+    var first = new ChatMessage(roomId, ownerParticipantId, "First", null, TIME);
+    var second = new ChatMessage(roomId, ownerParticipantId, "Second", null, TIME);
     em.persist(first);
     em.persist(second);
     var firstId = new ChatPinId(roomId, first.getId());
