@@ -61,6 +61,73 @@ flowchart LR
 
 소스를 바꿔도 서비스는 자동으로 바뀌지 않는다. 아래 재배포 절차를 따라야 한다.
 
+## Nginx 설정
+
+`/etc/nginx/sites-available/sahmhoot` 전문이다. `# managed by Certbot` 줄은 `certbot --nginx`가 HTTPS를 붙이면서 추가했다.
+
+```nginx
+server {
+    server_name sahmhoot.com www.sahmhoot.com;
+
+    root /var/www/sahmhoot;
+    index index.html;
+
+    # React 프론트엔드
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Spring Boot API
+    location /api/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # 실시간 퀴즈 WebSocket
+    location /ws {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+    }
+
+    listen 443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/sahmhoot.com/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/sahmhoot.com/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+}
+
+server {
+    if ($host = www.sahmhoot.com) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+    if ($host = sahmhoot.com) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+    listen 80;
+    server_name sahmhoot.com www.sahmhoot.com;
+    return 404; # managed by Certbot
+}
+```
+
+| 부분 | 역할 |
+|---|---|
+| `location /` + `try_files ... /index.html` | 파일이 없으면 `index.html`을 준다. React Router 경로를 새로고침해도 404가 나지 않는다 |
+| `location /api/` | `/api/*` 요청을 Spring Boot(8080)로 넘긴다. `X-Forwarded-*`로 원래 클라이언트 IP와 https 여부를 전달한다 |
+| `location /ws` | WebSocket 업그레이드(`Upgrade`, `Connection` 헤더, HTTP/1.1)를 Spring Boot로 넘긴다. `proxy_read_timeout 3600s`는 수업 중 연결이 60초 기본값에 끊기지 않게 한다 |
+| 443 `server` | 인증서 경로와 TLS 설정. 개인키(`privkey.pem`)는 경로만 적혀 있고 내용은 서버 밖으로 꺼내지 않는다 |
+| 80 `server` | 두 도메인의 HTTP 요청을 HTTPS로 301 리디렉션한다. 그 외 Host는 404 |
+
+설정을 바꾼 뒤에는 `sudo nginx -t`로 문법을 확인하고 `sudo systemctl reload nginx`로 반영한다.
+
 ## 환경변수 (`/etc/sahmhoot.env`)
 
 값은 서버에만 둔다. 키 이름만 확인할 때는 `sudo grep -oE '^[A-Z_]+=' /etc/sahmhoot.env`를 쓴다.
