@@ -14,7 +14,7 @@ CREATE TABLE `chat_pins`
 (
   `room_id`           bigint      NOT NULL COMMENT '소속 수업방 ID',
   `message_id`        bigint      NOT NULL COMMENT '고정 메시지 ID',
-  `pinned_by_user_id` bigint      NOT NULL COMMENT '고정한 교수 계정 ID',
+  `pinned_by_user_id` bigint      NOT NULL COMMENT '고정한 방 소유자 계정 ID',
   `pinned_at`         datetime(6) NOT NULL COMMENT '고정 일시',
   PRIMARY KEY (`room_id`, `message_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
@@ -23,7 +23,7 @@ CREATE TABLE `chat_restrictions`
 (
   `room_id`               bigint      NOT NULL COMMENT '소속 수업방 ID',
   `participant_id`        bigint      NOT NULL COMMENT '제한 대상 참가자 ID',
-  `restricted_by_user_id` bigint      NOT NULL COMMENT '제한한 교수 계정 ID',
+  `restricted_by_user_id` bigint      NOT NULL COMMENT '제한한 방 소유자 계정 ID',
   `restricted_at`         datetime(6) NOT NULL COMMENT '제한 시작 일시',
   PRIMARY KEY (`room_id`, `participant_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
@@ -73,7 +73,7 @@ ALTER TABLE `chat_restrictions`
 ALTER TABLE `chat_restrictions`
   ADD CONSTRAINT `fk_chat_restriction_actor` FOREIGN KEY (`restricted_by_user_id`) REFERENCES `users` (`id`);
 
--- 교수 전용 답글·이메일 조회·종료 후 기록 조회와 제한·고정 권한은 백엔드에서 검증한다.
+-- 방 소유자(rooms.host_id) 전용 답글·이메일 조회·종료 후 기록 조회와 제한·고정 권한은 백엔드에서 검증한다.
 -- 교수와 학생 모두 room_participants를 통해 작성하며 닉네임은 항상 room_participants.nickname이다.
 -- isOwner는 room_participants.user_id = rooms.host_id로 판정한다. 이메일은 참가자의 user_id로 users에서 조회한다.
 -- 인증 사용자와 참가자의 user_id 일치 및 수업 중 닉네임 변경 금지는 백엔드에서 검증한다.
