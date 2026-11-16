@@ -1,0 +1,123 @@
+// Source: V1__init.sql + V2__create_chat_tables.sql
+// 모든 일시는 UTC로 저장한다. 채팅 관련 6개 테이블만 포함한다.
+Project SahmHootChat {
+  database_type: 'MySQL'
+}
+
+Enum user_role {
+  PROFESSOR
+  STUDENT
+}
+
+Enum room_status {
+  OPEN
+  PLAYING
+  CLOSED
+}
+
+Table users {
+  id bigint [pk, increment, not null]
+  email varchar(255) [unique, not null]
+  password_hash varchar(255) [not null]
+  name varchar(50) [not null]
+  student_number varchar(20) [unique, null]
+  role user_role [not null]
+  email_verified boolean [not null, default: false]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+
+  Note: '교수 및 학생 사용자 계정. 채팅 작성자 이메일은 참가자의 user_id를 통해 조회한다.'
+}
+
+Table rooms {
+  id bigint [pk, increment, not null]
+  host_id bigint [not null]
+  title varchar(50) [not null]
+  code varchar(6) [unique, not null]
+  status room_status [not null]
+  created_at datetime [not null]
+  closed_at datetime [null]
+
+  indexes {
+    (status, closed_at, id) [name: 'idx_rooms_chat_retention']
+  }
+
+  Note: '실시간 퀴즈가 진행되는 수업방'
+}
+
+Table room_participants {
+  id bigint [pk, increment, not null]
+  room_id bigint [not null]
+  user_id bigint [not null]
+  nickname varchar(50) [not null]
+  joined_at datetime [not null]
+  left_at datetime [null]
+
+  indexes {
+    (room_id, user_id) [unique, name: 'room_participants_index_2']
+    (room_id, nickname) [unique, name: 'room_participants_index_3']
+    (room_id, id) [unique, name: 'uq_room_participants_chat_room_id']
+  }
+
+  Note: '교수와 학생 모두의 계정과 수업방별 닉네임을 매핑하는 참가 정보. 수업 중 닉네임 변경 금지는 백엔드에서 검증한다.'
+}
+
+Table chat_messages {
+  id bigint [pk, increment, not null]
+  room_id bigint [not null]
+  sender_participant_id bigint [not null, note: '교수 및 학생 발신자의 방 참가자 ID']
+  content varchar(300) [not null]
+  parent_id bigint [null, note: '답글 원본 메시지 ID']
+  created_at datetime(6) [not null]
+  deleted_at datetime(6) [null]
+
+  indexes {
+    (room_id, id) [unique, name: 'uq_chat_message_room_id']
+    (room_id, created_at, id) [name: 'idx_chat_messages_recent']
+    (room_id, parent_id) [name: 'idx_chat_messages_parent']
+  }
+
+  checks {
+    `CHAR_LENGTH(content) BETWEEN 1 AND 300` [name: 'ck_chat_message_content']
+  }
+
+  Note: '수업방 채팅 메시지. 닉네임은 항상 room_participants.nickname, isOwner는 참가자 user_id = rooms.host_id로 판정한다. 인증 사용자와 참가자의 user_id 일치는 백엔드에서 검증한다. recentMessages는 deleted_at IS NULL인 최근 50건이다.'
+}
+
+Table chat_pins {
+  room_id bigint [not null]
+  message_id bigint [not null]
+  pinned_by_user_id bigint [not null]
+  pinned_at datetime(6) [not null]
+
+  indexes {
+    (room_id, message_id) [pk]
+  }
+
+  Note: '수업방별 다중 고정 메시지. 최대 개수 제한 없이 메시지별 고정 및 해제 가능'
+}
+
+Table chat_restrictions {
+  room_id bigint [not null]
+  participant_id bigint [not null]
+  restricted_by_user_id bigint [not null]
+  restricted_at datetime(6) [not null]
+
+  indexes {
+    (room_id, participant_id) [pk]
+  }
+
+  Note: '수업방 참가자의 현재 채팅 제한'
+}
+
+Ref: rooms.host_id > users.id [delete: restrict, update: restrict]
+Ref: room_participants.room_id > rooms.id [delete: restrict, update: restrict]
+Ref: room_participants.user_id > users.id [delete: restrict, update: restrict]
+
+Ref fk_chat_message_room: chat_messages.room_id > rooms.id [delete: restrict, update: restrict]
+Ref fk_chat_message_participant: chat_messages.(room_id, sender_participant_id) > room_participants.(room_id, id) [delete: restrict, update: restrict]
+Ref fk_chat_message_parent: chat_messages.(room_id, parent_id) > chat_messages.(room_id, id) [delete: restrict, update: restrict]
+Ref fk_chat_pin_message: chat_pins.(room_id, message_id) > chat_messages.(room_id, id) [delete: cascade, update: restrict]
+Ref fk_chat_pin_actor: chat_pins.pinned_by_user_id > users.id [delete: restrict, update: restrict]
+Ref fk_chat_restriction_participant: chat_restrictions.(room_id, participant_id) > room_participants.(room_id, id) [delete: restrict, update: restrict]
+Ref fk_chat_restriction_actor: chat_restrictions.restricted_by_user_id > users.id [delete: restrict, update: restrict]
