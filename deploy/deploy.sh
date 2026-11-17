@@ -67,7 +67,8 @@ wait_healthy() {
 
 restart_with() {
   sudo systemctl stop sahmhoot
-  sudo cp -p "$1" "$APP_JAR"
+  # -p 없이 복사해 운영 jar를 root 소유로 둔다(빌드한 계정이 sudo 없이 바꿀 수 없게).
+  sudo cp "$1" "$APP_JAR"
   sudo systemctl start sahmhoot
 }
 
