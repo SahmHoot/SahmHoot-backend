@@ -77,6 +77,22 @@ class ChatServiceTest {
     assertError(new SendChatRequest("가".repeat(301), null), ChatErrorCode.VALIDATION_FAILED);
   }
 
+  @Test void unpairedSurrogatesAreRejectedBeforeSavingOrRegisteringEvents() {
+    char high = Character.MIN_HIGH_SURROGATE;
+    char low = Character.MIN_LOW_SURROGATE;
+    for (String malformed : new String[] {String.valueOf(high), String.valueOf(low),
+        new String(new char[] {high, 'x', low}), "😀" + low}) {
+      assertError(new SendChatRequest(malformed, null), ChatErrorCode.VALIDATION_FAILED);
+    }
+  }
+
+  @Test void validSupplementaryCharactersAreNotMistakenForUnpairedSurrogates() {
+    // 이 문자는 하위 16비트가 서로게이트 범위여도 정상 코드 포인트다.
+    String valid = new String(Character.toChars(0x1D800));
+    service.send(42L, 2L, new SendChatRequest(valid.repeat(300), null));
+    verify(messages).save(argThat(message -> message.getContent().equals(valid.repeat(300))));
+  }
+
   @Test void closedAndMissingRoomsRejectBeforeParticipantOrRestrictionReads() {
     when(rooms.findRoom(42L)).thenReturn(Optional.empty());
     assertError(new SendChatRequest("질문", null), ChatErrorCode.ROOM_NOT_FOUND);
