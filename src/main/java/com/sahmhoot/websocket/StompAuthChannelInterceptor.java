@@ -126,7 +126,7 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
 
   /** 권한 검사를 통과한 전송만 센다. 권한 없는 요청이 사용자의 한도를 쓰지 않게 하려는 순서다. */
   private void checkRate(String kind, String roomId, AuthUser user) {
-    String key = kind + ":" + roomId + ":" + user.userId();
+    String key = kind + ":" + Long.parseLong(roomId) + ":" + user.userId();
     boolean allowed =
         switch (kind) {
           case "chat" -> rateLimiter.tryAcquire(key, 5, Duration.ofSeconds(10));
