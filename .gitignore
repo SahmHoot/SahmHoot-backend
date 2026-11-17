@@ -49,6 +49,7 @@ HELP.md
 
 # Secrets — 예제 파일(*.example)만 커밋
 application-local.yml
+*.env
 .env
 .env.*
 !.env.example

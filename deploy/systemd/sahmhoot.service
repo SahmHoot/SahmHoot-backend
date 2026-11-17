@@ -1,0 +1,19 @@
+# 서버 /etc/systemd/system/sahmhoot.service 초안.
+# DEPLOY.md 설명("sahmhoot 계정으로 java -jar /opt/sahmhoot/app.jar 실행")으로 만들었고 실제 서버 파일과 아직 대조하지 않았다.
+# 서버에서 `systemctl cat sahmhoot`으로 확인해 다르면 서버 파일 기준으로 고친다. 비밀값은 Environment= 대신 EnvironmentFile로만 받는다.
+[Unit]
+Description=SahmHoot backend
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+User=sahmhoot
+EnvironmentFile=/etc/sahmhoot.env
+ExecStart=/usr/bin/java -jar /opt/sahmhoot/app.jar
+# SIGTERM으로 정상 종료하면 자바는 143으로 끝난다.
+SuccessExitStatus=143
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
