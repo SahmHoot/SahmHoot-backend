@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# deploy.sh 시험(#20). 서버 없이 임시 폴더에 가짜 서버를 만들어 실행한다.
+#   bash deploy/test-deploy.sh
+# sudo·systemctl·mysqldump·curl·npm·flock·sleep은 가짜 명령으로 바꾸고, git은 진짜를 쓴다.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+T="$(mktemp -d)"
+trap 'rm -rf "$T"' EXIT
+SECRET="s3cret-value-must-not-leak"
+FAILS=0
+
+pass() { printf '  통과: %s\n' "$1"; }
+fail() { printf '  실패: %s\n' "$1"; FAILS=$((FAILS + 1)); }
+check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
+
+# --- 가짜 명령 ---
+mkdir -p "$T/bin"
+stub() { printf '#!/bin/sh\n%s\n' "$2" > "$T/bin/$1"; chmod +x "$T/bin/$1"; }
+stub sudo 'exec "$@"'
+stub systemctl 'echo "$*" >> "$STUB_LOG"'
+stub journalctl 'echo "(가짜 로그)"'
+stub mysqldump 'echo "-- fake dump"'
+stub flock 'exit 0'
+stub sleep 'exit 0'
+stub curl 'jar="$SAHMHOOT_DEPLOY_PREFIX/opt/sahmhoot/app.jar"
+[ -n "${FAIL_JAR:-}" ] && [ "$(cat "$jar")" = "$FAIL_JAR" ] && exit 7
+echo "{\"status\":\"UP\"}"'
+stub npm 'if [ "$1" = run ]; then mkdir -p dist && cp version.txt dist/index.html; fi'
+export PATH="$T/bin:$PATH" STUB_LOG="$T/systemctl.log" SAHMHOOT_DEPLOY_PREFIX="$T/root"
+export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid
+export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid
+
+# --- 가짜 원격 저장소와 서버 소스 폴더 ---
+make_origin() { # $1 이름
+  git init -q --bare -b develop "$T/origin/$1.git"
+  git clone -q "$T/origin/$1.git" "$T/work/$1" 2>/dev/null
+  git -C "$T/work/$1" checkout -q -b develop
+}
+make_origin backend
+mkdir -p "$T/work/backend/deploy"
+cp "$HERE/deploy.sh" "$T/work/backend/deploy/deploy.sh"
+printf '#!/bin/sh\nrm -rf build && mkdir -p build/libs\ncp version.txt build/libs/sahmhoot-0.0.1-SNAPSHOT.jar\necho plain > build/libs/sahmhoot-0.0.1-SNAPSHOT-plain.jar\n' \
+  > "$T/work/backend/gradlew"
+chmod +x "$T/work/backend/gradlew"
+echo build/ > "$T/work/backend/.gitignore"
+make_origin frontend
+printf 'dist/\nnode_modules/\n' > "$T/work/frontend/.gitignore"
+publish() { # $1 저장소 $2 버전
+  echo "$2" > "$T/work/$1/version.txt"
+  git -C "$T/work/$1" add -A && git -C "$T/work/$1" commit -q -m "$2"
+  git -C "$T/work/$1" push -q origin develop
+}
+publish backend v1
+publish frontend f1
+mkdir -p "$T/srv"
+git clone -q -b develop "$T/origin/backend.git" "$T/srv/backend"
+git clone -q -b develop "$T/origin/frontend.git" "$T/srv/frontend"
+DEPLOY="$T/srv/backend/deploy/deploy.sh"
+
+# --- 가짜 서버 파일 ---
+R="$T/root"
+mkdir -p "$R/etc" "$R/opt/sahmhoot" "$R/var/www/sahmhoot"
+write_env() {
+  {
+    echo "SPRING_PROFILES_ACTIVE=prod"
+    echo "DB_USERNAME=sahmhoot_app"
+    echo "DB_PASSWORD=$SECRET"
+    echo "JWT_SECRET=$SECRET"
+    echo "CORS_ALLOWED_ORIGINS=https://sahmhoot.com"
+    echo "APP_ROOM_JOIN_BASE_URL=https://sahmhoot.com"
+  } > "$R/etc/sahmhoot.env"
+}
+write_env
+echo old > "$R/opt/sahmhoot/app.jar"
+
+run() { # 출력을 $T/out에 남기고 종료 코드를 돌려준다
+  set +e
+  bash "$DEPLOY" "$@" > "$T/out" 2>&1
+  local code=$?
+  set -e
+  cat "$T/out" >> "$T/all-out"
+  return $code
+}
+
+echo "1. 정상 배포(all develop): 원격의 새 커밋을 받아 교체한다"
+publish backend v2
+publish frontend f2
+: > "$STUB_LOG"
+if run all develop; then pass "종료 코드 0"; else fail "종료 코드 0"; cat "$T/out"; fi
+check "app.jar가 새 버전(v2)" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = v2 ]'
+check "이전 jar를 app.jar.bak으로 보관" '[ "$(cat "$R/opt/sahmhoot/app.jar.bak")" = old ]'
+check "-plain.jar는 쓰지 않음" '! grep -q plain "$R/opt/sahmhoot/app.jar"'
+check "중지 → 시작 순서" '[ "$(cat "$STUB_LOG")" = "$(printf "stop sahmhoot\nstart sahmhoot")" ]'
+BK="$(ls "$R"/var/backups/sahmhoot/predeploy-*.sql.gz 2>/dev/null | head -1)"
+check "DB 백업 파일 생성" '[ -n "$BK" ] && gunzip -c "$BK" | grep -q "fake dump"'
+check "백업 파일은 소유자만 읽기(600)" '[ -n "$(find "$BK" -perm 600)" ]'
+check "백업 폴더는 소유자만(700)" '[ -n "$(find "$R/var/backups/sahmhoot" -maxdepth 0 -perm 700)" ]'
+check "프론트 반영(f2)" '[ "$(cat "$R/var/www/sahmhoot/index.html")" = f2 ]'
+check "배포 기록에 브랜치와 두 커밋" 'grep -Eq "all develop backend=[0-9a-f]+ frontend=[0-9a-f]+" "$R/var/log/sahmhoot-deploy.log"'
+
+echo "2. 새 버전이 정상이 아니면 이전 버전으로 되돌린다"
+publish backend v3-broken
+: > "$STUB_LOG"
+if FAIL_JAR=v3-broken run backend develop; then fail "실패로 끝나야 함"; else pass "실패로 끝남"; fi
+check "app.jar가 이전 버전(v2)으로 복구" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = v2 ]'
+check "되돌렸다고 안내" 'grep -q "이전 버전으로 되돌렸습니다" "$T/out"'
+check "중지·시작을 두 번(교체, 복구)" '[ "$(grep -c . "$STUB_LOG")" = 4 ]'
+check "실패한 배포는 기록하지 않음" '! grep -q "backend develop" "$R/var/log/sahmhoot-deploy.log"'
+
+echo "3. 필수 키가 없거나 prod가 아니면 아무것도 바꾸지 않고 멈춘다"
+grep -v '^APP_ROOM_JOIN_BASE_URL=' "$R/etc/sahmhoot.env" > "$T/env" && mv "$T/env" "$R/etc/sahmhoot.env"
+: > "$STUB_LOG"
+if run all develop; then fail "실패로 끝나야 함"; else pass "실패로 끝남"; fi
+check "빠진 키 이름을 알려 줌" 'grep -q "APP_ROOM_JOIN_BASE_URL" "$T/out"'
+check "서비스를 건드리지 않음" '[ ! -s "$STUB_LOG" ]'
+write_env
+sed 's/^SPRING_PROFILES_ACTIVE=prod$/SPRING_PROFILES_ACTIVE=local/' "$R/etc/sahmhoot.env" > "$T/env" && mv "$T/env" "$R/etc/sahmhoot.env"
+if run backend develop; then fail "prod가 아니면 실패해야 함"; else pass "prod가 아니면 실패"; fi
+check "프로필 안내" 'grep -q "SPRING_PROFILES_ACTIVE" "$T/out"'
+write_env
+
+echo "4. 서버 소스에 커밋하지 않은 변경이 있으면 멈춘다"
+echo hotfix > "$T/srv/backend/hotfix.txt"
+if run backend develop; then fail "실패로 끝나야 함"; else pass "실패로 끝남"; fi
+check "변경 안내" 'grep -q "커밋하지 않은 변경" "$T/out"'
+rm "$T/srv/backend/hotfix.txt"
+
+echo "5. 없는 브랜치, 잘못된 대상"
+if run backend no-such-branch; then fail "없는 브랜치는 실패해야 함"; else pass "없는 브랜치는 실패"; fi
+check "브랜치 안내" 'grep -q "no-such-branch" "$T/out"'
+if run; then fail "대상 없이 실행하면 실패해야 함"; else pass "대상 없이 실행하면 사용법 안내"; fi
+
+echo "6. 비밀값이 출력에 나오지 않는다"
+check "모든 실행 출력에 비밀값 없음" '! grep -q "$SECRET" "$T/all-out"'
+
+if [ "$FAILS" -eq 0 ]; then echo "모두 통과"; else echo "실패 $FAILS건"; exit 1; fi
