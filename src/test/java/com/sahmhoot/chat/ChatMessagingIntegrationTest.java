@@ -284,6 +284,42 @@ class ChatMessagingIntegrationTest {
     assertThat(messageCount()).isEqualTo(1);
   }
 
+  @Test void inactiveParticipantCannotSubscribeToNewChatMessages() throws Exception {
+    jdbc.update("UPDATE room_participants SET left_at = UTC_TIMESTAMP() WHERE id = ?", studentParticipantId);
+    var formerParticipant = connect(student);
+    var errors = subscribe(formerParticipant, "/user/queue/errors");
+    BlockingQueue<JsonNode> received = new LinkedBlockingQueue<>();
+    formerParticipant.subscribe(chatTopic(), collect(received));
+    // 같은 연결의 후속 구독 RECEIPT로 앞의 구독 시도가 처리됐음을 확인한다.
+    subscribe(formerParticipant, "/user/queue/errors");
+    service.send(room.getId(), owner.getId(), new SendChatRequest("참여자만 볼 수 있는 대화", null));
+    assertThat(received.poll(1, TimeUnit.SECONDS)).as("비활성 참여자는 새 채팅을 수신하면 안 된다").isNull();
+    assertThat(take(errors).path("code").asText()).isEqualTo("NOT_PARTICIPANT");
+    jdbc.update("UPDATE room_participants SET left_at = NULL WHERE id = ?", studentParticipantId);
+    var rejoined = subscribe(formerParticipant, chatTopic());
+    service.send(room.getId(), owner.getId(), new SendChatRequest("재입장 후 대화", null));
+    assertThat(take(rejoined).path("content").asText()).isEqualTo("재입장 후 대화");
+    assertThat(received).as("거부됐던 구독은 재입장 후에도 등록되지 않아야 한다").isEmpty();
+  }
+
+  @Test void overflowingRoomIdReturnsErrorOnlyToSendingTabAndFollowingChatStillWorks() throws Exception {
+    var sender = connect(student);
+    var otherTab = connect(student);
+    var errors = subscribe(sender, "/user/queue/errors");
+    var otherErrors = subscribe(otherTab, "/user/queue/errors");
+    var topic = subscribe(sender, chatTopic());
+    var headers = new StompHeaders();
+    headers.setDestination("/app/rooms/9223372036854775808/chat");
+    headers.setContentType(org.springframework.util.MimeTypeUtils.APPLICATION_JSON);
+    sender.send(headers, "{\"content\":\"잘못된 방 번호\"}".getBytes(StandardCharsets.UTF_8));
+    assertThat(take(errors).path("code").asText()).isEqualTo("FORBIDDEN");
+    assertThat(messageCount()).isZero();
+    assertThat(otherErrors.poll(200, TimeUnit.MILLISECONDS)).isNull();
+    send(sender, "같은 연결에서 정상 전송");
+    assertThat(take(topic).path("content").asText()).isEqualTo("같은 연결에서 정상 전송");
+    assertThat(messageCount()).isEqualTo(1);
+  }
+
   @Test void professorInSomeoneElsesRoomRemainsAnonymousAndCannotReply() throws Exception {
     User guest = user(Role.PROFESSOR, "외부교수실명");
     Long guestId = join(room, guest, "비소유자닉네임");
@@ -481,14 +517,18 @@ class ChatMessagingIntegrationTest {
     var headers = new StompHeaders();
     headers.setDestination(destination);
     headers.setReceipt(UUID.randomUUID().toString());
-    session.subscribe(headers, new StompFrameHandler() {
+    session.subscribe(headers, collect(received)).addReceiptTask(() -> ready.complete(null));
+    ready.get(7, TimeUnit.SECONDS);
+    return received;
+  }
+
+  private StompFrameHandler collect(BlockingQueue<JsonNode> received) {
+    return new StompFrameHandler() {
       @Override public Type getPayloadType(StompHeaders ignored) { return byte[].class; }
       @Override public void handleFrame(StompHeaders ignored, Object payload) {
         received.add(json.readTree((byte[]) payload));
       }
-    }).addReceiptTask(() -> ready.complete(null));
-    ready.get(7, TimeUnit.SECONDS);
-    return received;
+    };
   }
 
   private JsonNode take(BlockingQueue<JsonNode> queue) throws InterruptedException {
