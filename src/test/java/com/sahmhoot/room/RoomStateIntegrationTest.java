@@ -93,7 +93,7 @@ class RoomStateIntegrationTest {
         .andExpect(jsonPath("$.me.chatBlocked").value(false))
         .andExpect(jsonPath("$.onlineCount").value(0))
         .andExpect(jsonPath("$.quiz").value(nullValue()))
-        .andExpect(jsonPath("$.pinnedMessage").value(nullValue()))
+        .andExpect(jsonPath("$.pinnedMessages").isEmpty())
         .andExpect(jsonPath("$.recentMessages").isEmpty())
         .andExpect(jsonPath("$.progress").doesNotExist())
         .andExpect(jsonPath("$.reactionStats").doesNotExist())
