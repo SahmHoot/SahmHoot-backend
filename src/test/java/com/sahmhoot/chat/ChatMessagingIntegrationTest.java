@@ -6,14 +6,18 @@ import com.sahmhoot.auth.jwt.JwtProvider;
 import com.sahmhoot.chat.dto.SendChatRequest;
 import com.sahmhoot.chat.entity.ChatMessage;
 import com.sahmhoot.chat.event.ChatMessageEvent;
+import com.sahmhoot.chat.exception.ChatErrorCode;
+import com.sahmhoot.chat.exception.ChatException;
 import com.sahmhoot.chat.repository.ChatMessageRepository;
 import com.sahmhoot.chat.service.ChatService;
 import com.sahmhoot.quiz.lock.RoomLockManager;
 import com.sahmhoot.room.entity.Room;
 import com.sahmhoot.room.entity.RoomParticipant;
+import com.sahmhoot.room.entity.RoomStatus;
 import com.sahmhoot.room.repository.RoomParticipantRepository;
 import com.sahmhoot.room.repository.RoomRepository;
 import com.sahmhoot.room.service.JoinCodeGenerator;
+import com.sahmhoot.room.service.RoomManagementService;
 import com.sahmhoot.user.Role;
 import com.sahmhoot.user.User;
 import com.sahmhoot.user.UserRepository;
@@ -30,18 +34,29 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.messaging.Message;
+import org.springframework.messaging.MessageChannel;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.simp.SimpMessageType;
 import org.springframework.messaging.simp.stomp.*;
+import org.springframework.messaging.support.AbstractSubscribableChannel;
+import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.event.TransactionalEventListener;
@@ -65,7 +80,7 @@ class ChatMessagingIntegrationTest {
   static class CommitProbe {
     final DataSource source;
     final RoomLockManager locks;
-    final List<Observation> committed = new java.util.concurrent.CopyOnWriteArrayList<>();
+    final List<Observation> committed = new CopyOnWriteArrayList<>();
     volatile Long rejectRoom;
 
     CommitProbe(DataSource source, RoomLockManager locks) { this.source = source; this.locks = locks; }
@@ -97,10 +112,12 @@ class ChatMessagingIntegrationTest {
   @Autowired RoomParticipantRepository participants;
   @Autowired ChatMessageRepository messages;
   @Autowired ChatService service;
+  @Autowired RoomManagementService management;
   @Autowired JwtProvider jwt;
   @Autowired JdbcTemplate jdbc;
   @Autowired JsonMapper json;
   @Autowired CommitProbe probe;
+  @Autowired @Qualifier("brokerChannel") AbstractSubscribableChannel brokerChannel;
   private final List<User> createdUsers = new ArrayList<>();
   private final List<Room> createdRooms = new ArrayList<>();
   private final List<StompSession> sessions = new ArrayList<>();
@@ -344,6 +361,83 @@ class ChatMessagingIntegrationTest {
         service.send(room.getId(), student.getId(), new SendChatRequest("롤백", null)));
     assertThat(messageCount()).isEqualTo(1);
     assertThat(probe.committed).hasSize(1);
+  }
+
+  @Test void malformedUnicodeCannotBeStoredAsReplacementCharacters() {
+    String malformed = String.valueOf(Character.MIN_HIGH_SURROGATE);
+    assertThatThrownBy(() -> service.send(room.getId(), student.getId(), new SendChatRequest(malformed, null)))
+        .isInstanceOfSatisfying(ChatException.class, error -> assertThat(error.code()).isEqualTo(ChatErrorCode.VALIDATION_FAILED));
+    assertThat(messageCount()).isZero();
+    assertThat(probe.committed).isEmpty();
+  }
+
+  @Test void escapedUnpairedSurrogatesReturnValidationErrorsWithoutDisconnecting() throws Exception {
+    var sender = connect(student);
+    var errors = subscribe(sender, "/user/queue/errors");
+    var topic = subscribe(sender, chatTopic());
+    for (String escaped : List.of("\\uD800", "\\uDC00", "\\uD800x\\uDC00")) {
+      sendRaw(sender, "{\"content\":\"" + escaped + "\"}");
+      assertThat(take(errors).path("code").asText()).isEqualTo("VALIDATION_FAILED");
+    }
+    assertThat(messageCount()).isZero();
+    assertThat(topic).isEmpty();
+    send(sender, "정상😀");
+    assertThat(take(topic).path("content").asText()).isEqualTo("정상😀");
+    assertThat(messageCount()).isEqualTo(1);
+  }
+
+  @Test void roomCloseWaitsForCommittedChatPublicationAndThenRejectsFurtherMessages() throws Exception {
+    var publishing = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    var closingStarted = new CountDownLatch(1);
+    List<String> published = new CopyOnWriteArrayList<>();
+    String chat = chatTopic();
+    String quiz = "/topic/rooms/" + room.getId() + "/quiz";
+    ChannelInterceptor blocker = new ChannelInterceptor() {
+      @Override public Message<?> preSend(Message<?> message, MessageChannel channel) {
+        if (SimpMessageHeaderAccessor.getMessageType(message.getHeaders()) != SimpMessageType.MESSAGE) return message;
+        String destination = SimpMessageHeaderAccessor.getDestination(message.getHeaders());
+        if (!chat.equals(destination) && !quiz.equals(destination)) return message;
+        if (chat.equals(destination)) {
+          publishing.countDown();
+          try {
+            if (!release.await(7, TimeUnit.SECONDS)) throw new IllegalStateException("Chat publication was not released");
+          } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Chat publication interrupted", error);
+          }
+        }
+        published.add(destination);
+        return message;
+      }
+    };
+    brokerChannel.addInterceptor(blocker);
+    var executor = Executors.newFixedThreadPool(2);
+    try {
+      var sending = executor.submit(() -> service.send(room.getId(), student.getId(), new SendChatRequest("종료 직전 채팅", null)));
+      assertThat(publishing.await(7, TimeUnit.SECONDS)).isTrue();
+      assertThat(messageCount()).as("발행 전에 DB 커밋이 끝나야 한다").isEqualTo(1);
+      var closing = executor.submit(() -> {
+        closingStarted.countDown();
+        management.close(room.getId(), owner.getId());
+      });
+      assertThat(closingStarted.await(7, TimeUnit.SECONDS)).isTrue();
+      assertThatThrownBy(() -> closing.get(200, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
+      assertThat(rooms.findById(room.getId()).orElseThrow().getStatus()).isEqualTo(RoomStatus.OPEN);
+      release.countDown();
+      sending.get(7, TimeUnit.SECONDS);
+      closing.get(7, TimeUnit.SECONDS);
+      assertThat(published).containsExactly(chat, quiz);
+      assertThat(rooms.findById(room.getId()).orElseThrow().getStatus()).isEqualTo(RoomStatus.CLOSED);
+      assertThatThrownBy(() -> service.send(room.getId(), student.getId(), new SendChatRequest("종료 후 채팅", null)))
+          .isInstanceOfSatisfying(ChatException.class, error -> assertThat(error.code()).isEqualTo(ChatErrorCode.ROOM_CLOSED));
+      assertThat(messageCount()).isEqualTo(1);
+    } finally {
+      release.countDown();
+      executor.shutdownNow();
+      brokerChannel.removeInterceptor(blocker);
+      assertThat(executor.awaitTermination(7, TimeUnit.SECONDS)).isTrue();
+    }
   }
 
   private User user(Role role, String name) {
