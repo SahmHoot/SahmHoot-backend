@@ -47,10 +47,10 @@ public class ChatService {
       throw new IllegalStateException("ChatService must be called before starting a transaction");
     }
     // 수업 종료와 채팅 저장·커밋 후 발행을 같은 방 잠금으로 직렬화한다.
-    locks.executeWithLock(roomId, () -> writing.executeWithoutResult(tx -> save(roomId, userId, request)));
+    locks.executeWithLock(roomId, () -> writing.executeWithoutResult(tx -> sendInTransaction(roomId, userId, request)));
   }
 
-  private void save(Long roomId, Long userId, SendChatRequest request) {
+  private void sendInTransaction(Long roomId, Long userId, SendChatRequest request) {
     var room = rooms.findRoom(roomId).orElseThrow(() -> new ChatException(ChatErrorCode.ROOM_NOT_FOUND));
     if (room.closed()) throw new ChatException(ChatErrorCode.ROOM_CLOSED);
     var sender = rooms.findActiveParticipant(roomId, userId)
@@ -60,7 +60,7 @@ public class ChatService {
     }
     validateContent(request.content());
     boolean owner = room.ownerId().equals(sender.userId());
-    String parentPreview = parentPreview(roomId, request.parentId(), owner);
+    String parentPreview = resolveParentPreview(roomId, request.parentId(), owner);
     var message = messages.save(new ChatMessage(roomId, sender.id(), request.content(), request.parentId(),
         Instant.now(clock).truncatedTo(ChronoUnit.MICROS)));
     events.publishEvent(ChatMessageEvent.of(roomId, new ChatMessageResponse(message.getId(), sender.id(),
@@ -69,12 +69,19 @@ public class ChatService {
 
   private void validateContent(String content) {
     // MySQL CHAR_LENGTH와 같은 문자 기준으로 센다. 이모지는 UTF-16 길이가 2여도 한 글자다.
-    if (content == null || content.isBlank() || content.codePointCount(0, content.length()) > 300) {
+    if (content == null || content.isBlank() || content.codePointCount(0, content.length()) > 300
+        || containsUnpairedSurrogate(content)) {
       throw new ChatException(ChatErrorCode.VALIDATION_FAILED);
     }
   }
 
-  private String parentPreview(Long roomId, Long parentId, boolean owner) {
+  private boolean containsUnpairedSurrogate(String content) {
+    // 정상 쌍은 codePoints()에서 하나로 합쳐지므로 서로게이트 범위에 남는 값은 잘못된 입력이다.
+    return content.codePoints().anyMatch(codePoint ->
+        codePoint >= Character.MIN_SURROGATE && codePoint <= Character.MAX_SURROGATE);
+  }
+
+  private String resolveParentPreview(Long roomId, Long parentId, boolean owner) {
     if (parentId == null) return null;
     if (!owner) throw new ChatException(ChatErrorCode.FORBIDDEN);
     return messages.findByIdAndRoomIdAndDeletedAtIsNull(parentId, roomId)

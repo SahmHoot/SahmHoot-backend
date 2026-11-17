@@ -35,14 +35,18 @@ public class RoomChatStateAdapter implements RoomChatStatePort {
     var all = Stream.concat(recent.stream(), pinned.stream()).toList();
     var senders = rooms.findParticipants(roomId, all.stream().map(ChatMessage::getSenderParticipantId)
         .collect(Collectors.toSet()));
-    Set<Long> parentIds = all.stream().map(ChatMessage::getParentId).filter(Objects::nonNull)
-        .collect(Collectors.toSet());
-    Map<Long, ChatMessage> parents = parentIds.isEmpty() ? Map.of()
-        : messages.findByRoomIdAndIdIn(roomId, parentIds).stream()
-            .collect(Collectors.toMap(ChatMessage::getId, Function.identity()));
+    var parents = findParents(roomId, all);
     boolean blocked = restrictions.existsById(new ChatRestrictionId(roomId, participantId));
     return new Snapshot(blocked, render(recent, room.ownerId(), senders, parents),
         render(pinned, room.ownerId(), senders, parents));
+  }
+
+  private Map<Long, ChatMessage> findParents(Long roomId, List<ChatMessage> source) {
+    Set<Long> parentIds = source.stream().map(ChatMessage::getParentId).filter(Objects::nonNull)
+        .collect(Collectors.toSet());
+    if (parentIds.isEmpty()) return Map.of();
+    return messages.findByRoomIdAndIdIn(roomId, parentIds).stream()
+        .collect(Collectors.toMap(ChatMessage::getId, Function.identity()));
   }
 
   private List<Message> render(List<ChatMessage> source, Long ownerId,
