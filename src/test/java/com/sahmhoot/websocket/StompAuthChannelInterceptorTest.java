@@ -131,6 +131,24 @@ class StompAuthChannelInterceptorTest {
   }
 
   @Test
+  void 방_번호_앞의_0으로_채팅_한도를_우회할_수_없다() {
+    for (int i = 0; i < 5; i++) {
+      String roomId = i % 2 == 0 ? "10" : "0010";
+      allowed(frame(StompCommand.SEND, 2L, "/app/rooms/" + roomId + "/chat", null));
+    }
+    rejected(frame(StompCommand.SEND, 2L, "/app/rooms/00010/chat", null), "2:RATE_LIMITED");
+  }
+
+  @Test
+  void 방_번호_앞의_0으로_이모지_한도를_우회할_수_없다() {
+    for (int i = 0; i < 3; i++) {
+      String roomId = i % 2 == 0 ? "10" : "0010";
+      allowed(frame(StompCommand.SEND, 2L, "/app/rooms/" + roomId + "/reaction", null));
+    }
+    rejected(frame(StompCommand.SEND, 2L, "/app/rooms/00010/reaction", null), "2:RATE_LIMITED");
+  }
+
+  @Test
   void 탭이_달라도_같은_사용자는_한도를_같이_쓴다() {
     for (int i = 0; i < 5; i++) {
       allowed(inSession(frame(StompCommand.SEND, 2L, "/app/rooms/10/chat", null), "tab-" + (i % 2)));
