@@ -104,6 +104,23 @@ class StompAuthChannelInterceptorTest {
   }
 
   @Test
+  void Long_범위를_넘는_방_번호는_예외_대신_거부_응답을_보낸다() {
+    String roomId = "9223372036854775808";
+    rejected(frame(StompCommand.SEND, 2L, "/app/rooms/" + roomId + "/chat", null), "2:FORBIDDEN");
+    for (String destination : List.of("/topic/rooms/" + roomId + "/chat",
+        "/user/queue/rooms/" + roomId + "/me", "/user/queue/rooms/" + roomId + "/stats")) {
+      rejected(frame(StompCommand.SUBSCRIBE, 2L, destination, null), "2:FORBIDDEN");
+    }
+  }
+
+  @Test
+  void Long_최댓값은_유효한_방_번호로_읽고_참여_권한을_검사한다() {
+    String roomId = String.valueOf(Long.MAX_VALUE);
+    rejected(frame(StompCommand.SEND, 2L, "/app/rooms/" + roomId + "/chat", null), "2:NOT_PARTICIPANT");
+    rejected(frame(StompCommand.SUBSCRIBE, 2L, "/topic/rooms/" + roomId + "/chat", null), "2:NOT_PARTICIPANT");
+  }
+
+  @Test
   void topic으로의_SEND는_거부() {
     allowed(frame(StompCommand.SEND, 2L, "/app/rooms/10/chat", null));
     rejected(frame(StompCommand.SEND, 2L, "/topic/rooms/10/quiz", null), "2:FORBIDDEN");
