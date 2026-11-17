@@ -137,7 +137,11 @@ class LocalSeedIntegrationTest {
     var args = new ArrayList<>(List.of(
         "--spring.profiles.active=" + profiles, "--spring.datasource.url=" + url,
         "--server.port=0", "--spring.main.banner-mode=off",
-        "--app.jwt.secret=test-only-seed52-jwt-key-0123456789abcdef"));
+        "--app.jwt.secret=test-only-seed52-jwt-key-0123456789abcdef",
+        // prod 프로필은 기본값이 없으므로(application-prod.yml) 테스트 DB 계정과 주소를 직접 넘긴다.
+        "--spring.datasource.username=sahmhoot_user", "--spring.datasource.password=sahmhoot1!",
+        "--app.room.join-base-url=http://localhost:5173",
+        "--app.cors.allowed-origins=http://localhost:5173"));
     args.addAll(List.of(properties));
     return new SpringApplicationBuilder(SahmhootApplication.class).run(args.toArray(String[]::new));
   }
