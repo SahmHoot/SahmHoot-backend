@@ -26,7 +26,8 @@ stub sleep 'exit 0'
 stub curl 'jar="$SAHMHOOT_DEPLOY_PREFIX/opt/sahmhoot/app.jar"
 [ -n "${FAIL_JAR:-}" ] && [ "$(cat "$jar")" = "$FAIL_JAR" ] && exit 7
 echo "{\"status\":\"UP\"}"'
-stub npm 'if [ "$1" = run ]; then mkdir -p dist && cp version.txt dist/index.html; fi'
+stub npm '[ -n "${NPM_FAIL:-}" ] && exit 1
+if [ "$1" = run ]; then mkdir -p dist && cp version.txt dist/index.html; fi'
 export PATH="$T/bin:$PATH" STUB_LOG="$T/systemctl.log" SAHMHOOT_DEPLOY_PREFIX="$T/root"
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid
 export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid
@@ -131,7 +132,15 @@ if run backend no-such-branch; then fail "없는 브랜치는 실패해야 함";
 check "브랜치 안내" 'grep -q "no-such-branch" "$T/out"'
 if run; then fail "대상 없이 실행하면 실패해야 함"; else pass "대상 없이 실행하면 사용법 안내"; fi
 
-echo "6. 비밀값이 출력에 나오지 않는다"
+echo "6. 프론트 빌드가 실패하면 백엔드도 바꾸지 않는다"
+publish backend v4
+: > "$STUB_LOG"
+BEFORE="$(cat "$R/opt/sahmhoot/app.jar")"
+if NPM_FAIL=1 run all develop; then fail "실패로 끝나야 함"; else pass "실패로 끝남"; fi
+check "서비스를 건드리지 않음" '[ ! -s "$STUB_LOG" ]'
+check "app.jar 그대로" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = "$BEFORE" ]'
+
+echo "7. 비밀값이 출력에 나오지 않는다"
 check "모든 실행 출력에 비밀값 없음" '! grep -q "$SECRET" "$T/all-out"'
 
 if [ "$FAILS" -eq 0 ]; then echo "모두 통과"; else echo "실패 $FAILS건"; exit 1; fi

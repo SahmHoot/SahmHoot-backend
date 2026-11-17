@@ -108,7 +108,7 @@ bash ~/sahmhoot/backend/deploy/deploy.sh all develop
 ```
 
 - 대상: `all`(백엔드 → 프론트 순서), `backend`, `frontend`. 브랜치나 태그를 생략하면 `develop`이다. 최종 배포(#33)는 `deploy.sh all v1.0.0`처럼 태그로 한다.
-- 스크립트가 하는 일: 필수 환경변수 확인 → 소스를 원격 브랜치·태그의 커밋에 맞춤 → 백엔드 빌드 → DB 백업(`/var/backups/sahmhoot`) → JAR 교체·재시작 → `/api/health`가 90초 안에 UP인지 확인 → 프론트 빌드·복사 → `/var/log/sahmhoot-deploy.log`에 기록.
+- 스크립트가 하는 일: 필수 환경변수 확인 → 소스를 원격 브랜치·태그의 커밋에 맞춤 → 백엔드·프론트 빌드 → DB 백업(`/var/backups/sahmhoot`) → JAR 교체·재시작 → `/api/health`가 90초 안에 UP인지 확인 → 프론트 복사 → `/var/log/sahmhoot-deploy.log`에 기록. 빌드가 모두 끝난 뒤에만 서비스를 바꾸므로, 빌드가 실패하면 운영 중인 서버는 그대로다.
 - 새 버전이 UP이 되지 않으면 `app.jar.bak`(직전 버전)으로 되돌리고 실패로 끝난다. DB는 되돌리지 않는다. Flyway 마이그레이션은 기동할 때 적용되므로, 필요하면 백업 파일로 복원한다(아래 "백업").
 - 멈추는 경우: 필수 키가 없을 때, 서버 소스 폴더에 커밋하지 않은 변경이 있을 때, 브랜치·태그가 없을 때, 다른 배포가 진행 중일 때.
 - 소스 폴더는 배포한 커밋에 고정(detached HEAD)된다. 서버에서 `git pull`이나 파일 수정을 하지 않는다. 고칠 것은 PR로 올린다.

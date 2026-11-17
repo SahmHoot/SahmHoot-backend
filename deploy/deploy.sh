@@ -4,8 +4,8 @@
 #   deploy/deploy.sh <all|backend|frontend> [브랜치 또는 태그]      기본: develop
 #   내 PC에서:  ssh <계정>@sahmhoot.com 'bash ~/sahmhoot/backend/deploy/deploy.sh all develop'
 #
-# 백엔드: 필수 환경변수 확인 → 소스 맞춤 → 빌드 → DB 백업 → jar 교체·재시작 → 상태 확인(실패하면 이전 jar로 되돌림)
-# 프론트: 소스 맞춤 → 빌드 → 복사.  마지막에 배포 기록을 남긴다.
+# 순서: 필수 환경변수 확인 → 소스 맞춤 → 빌드(백엔드·프론트) → DB 백업 → jar 교체·재시작
+#       → 상태 확인(실패하면 이전 jar로 되돌림) → 프론트 복사 → 배포 기록.
 # 비밀값은 /etc/sahmhoot.env에만 있다. 이 스크립트는 키가 있는지만 확인하고 값은 읽거나 출력하지 않는다.
 # 재시작하는 동안 접속이 끊기므로 수업 중에는 실행하지 않는다.
 set -euo pipefail
@@ -71,16 +71,25 @@ restart_with() {
   sudo systemctl start sahmhoot
 }
 
-deploy_backend() {
-  local f jars=() backup
-  checkout "$BACKEND_DIR"
+build_backend() {
+  local f jars=()
   log "백엔드 빌드"
   (cd "$BACKEND_DIR" && ./gradlew --quiet clean bootJar)
   for f in "$BACKEND_DIR"/build/libs/*.jar; do
     case "$f" in *-plain.jar) ;; *) [ -f "$f" ] && jars+=("$f") ;; esac
   done
   [ "${#jars[@]}" -eq 1 ] || die "실행할 jar를 하나로 정하지 못했습니다(build/libs 확인)."
+  NEW_JAR="${jars[0]}"
+}
 
+build_frontend() {
+  log "프론트 빌드"
+  (cd "$FRONTEND_DIR" && npm ci --no-audit --no-fund --loglevel=error && npm run build --silent)
+  [ -f "$FRONTEND_DIR/dist/index.html" ] || die "프론트 빌드 결과(dist/index.html)가 없습니다."
+}
+
+release_backend() {
+  local backup
   # Flyway 마이그레이션은 기동할 때 적용되므로 교체 전에 DB를 백업한다.
   backup="$BACKUP_DIR/predeploy-$(date +%Y%m%d-%H%M%S).sql.gz"
   sudo mkdir -p "$BACKUP_DIR"
@@ -93,7 +102,7 @@ deploy_backend() {
 
   if sudo test -f "$APP_JAR"; then sudo cp -p "$APP_JAR" "$APP_JAR.bak"; fi
   log "백엔드 교체·재시작"
-  restart_with "${jars[0]}"
+  restart_with "$NEW_JAR"
   if wait_healthy; then
     log "백엔드 정상(UP)"
     DEPLOYED="$DEPLOYED backend=$(git -C "$BACKEND_DIR" rev-parse --short HEAD)"
@@ -111,11 +120,7 @@ deploy_backend() {
   die "이전 버전도 정상이 아닙니다. 서버를 직접 확인하세요. DB 백업: $backup"
 }
 
-deploy_frontend() {
-  checkout "$FRONTEND_DIR"
-  log "프론트 빌드"
-  (cd "$FRONTEND_DIR" && npm ci --no-audit --no-fund --loglevel=error && npm run build --silent)
-  [ -f "$FRONTEND_DIR/dist/index.html" ] || die "프론트 빌드 결과(dist/index.html)가 없습니다."
+release_frontend() {
   sudo test -d "$WEB_ROOT" || die "$WEB_ROOT 가 없습니다."
   # 이전 빌드 파일은 지우지 않는다. 이미 열려 있는 화면이 예전 파일을 계속 불러올 수 있게 하기 위해서다.
   sudo cp -a "$FRONTEND_DIR/dist/." "$WEB_ROOT/"
@@ -146,12 +151,18 @@ main() {
   exec 9>"$(dirname "$BACKEND_DIR")/.deploy.lock"
   flock -n 9 || die "다른 배포가 진행 중입니다."
 
-  [ "$TARGET" = frontend ] || check_env
-  case "$TARGET" in
-    all) deploy_backend; deploy_frontend ;;
-    backend) deploy_backend ;;
-    frontend) deploy_frontend ;;
-  esac
+  local backend=false frontend=false
+  [ "$TARGET" = frontend ] || backend=true
+  [ "$TARGET" = backend ] || frontend=true
+
+  # 확인·소스 맞춤·빌드가 모두 끝난 뒤에만 실행 중인 서비스를 바꾼다.
+  # 그래서 프론트 빌드가 실패해도 백엔드만 새 버전이 되는 일이 없다.
+  if $backend; then check_env; checkout "$BACKEND_DIR"; fi
+  if $frontend; then checkout "$FRONTEND_DIR"; fi
+  if $backend; then build_backend; fi
+  if $frontend; then build_frontend; fi
+  if $backend; then release_backend; fi
+  if $frontend; then release_frontend; fi
   record
   log "완료. 확인: curl -s https://sahmhoot.com/api/health"
 }
