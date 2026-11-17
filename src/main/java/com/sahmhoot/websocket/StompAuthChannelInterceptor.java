@@ -96,17 +96,17 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
     }
     Matcher m = ROOM_TOPIC.matcher(dest);
     if (m.matches()) {
-      requireParticipant(m.group(1), user);
+      requireParticipant(parseRoomId(m.group(1)), user);
       return;
     }
     m = ROOM_ME.matcher(dest);
     if (m.matches()) {
-      requireParticipant(m.group(1), user);
+      requireParticipant(parseRoomId(m.group(1)), user);
       return;
     }
     m = ROOM_STATS.matcher(dest);
     if (m.matches()) {
-      if (!roomAccess.isOwner(Long.parseLong(m.group(1)), user.userId())) {
+      if (!roomAccess.isOwner(parseRoomId(m.group(1)), user.userId())) {
         throw deny(StompRejectCode.FORBIDDEN);
       }
       return;
@@ -120,13 +120,14 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
       // /topic/**, /queue/**, /user/** 등으로의 SEND는 무조건 거부(서버 알림 흉내 방지).
       throw deny(StompRejectCode.FORBIDDEN);
     }
-    requireParticipant(m.group(1), user);
-    checkRate(m.group(2), m.group(1), user);
+    long roomId = parseRoomId(m.group(1));
+    requireParticipant(roomId, user);
+    checkRate(m.group(2), roomId, user);
   }
 
   /** 권한 검사를 통과한 전송만 센다. 권한 없는 요청이 사용자의 한도를 쓰지 않게 하려는 순서다. */
-  private void checkRate(String kind, String roomId, AuthUser user) {
-    String key = kind + ":" + Long.parseLong(roomId) + ":" + user.userId();
+  private void checkRate(String kind, long roomId, AuthUser user) {
+    String key = kind + ":" + roomId + ":" + user.userId();
     boolean allowed =
         switch (kind) {
           case "chat" -> rateLimiter.tryAcquire(key, 5, Duration.ofSeconds(10));
@@ -138,9 +139,17 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
     }
   }
 
-  private void requireParticipant(String roomId, AuthUser user) {
-    if (!roomAccess.isParticipant(Long.parseLong(roomId), user.userId())) {
+  private void requireParticipant(long roomId, AuthUser user) {
+    if (!roomAccess.isParticipant(roomId, user.userId())) {
       throw deny(StompRejectCode.NOT_PARTICIPANT);
+    }
+  }
+
+  private static long parseRoomId(String roomId) {
+    try {
+      return Long.parseLong(roomId);
+    } catch (NumberFormatException exception) {
+      throw deny(StompRejectCode.FORBIDDEN);
     }
   }
 
