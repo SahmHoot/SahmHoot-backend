@@ -65,11 +65,27 @@ wait_healthy() {
   return 1
 }
 
-restart_with() {
-  sudo systemctl stop sahmhoot
-  # -p 없이 복사해 운영 jar를 root 소유로 둔다(빌드한 계정이 sudo 없이 바꿀 수 없게).
-  sudo cp "$1" "$APP_JAR"
-  sudo systemctl start sahmhoot
+# $1을 app.jar 옆 임시 파일로 끝까지 복사해 둔다. 서비스는 아직 그대로다.
+# -p 없이 복사해 운영 jar를 root 소유로 둔다(빌드한 계정이 sudo 없이 바꿀 수 없게).
+stage_jar() {
+  sudo cp "$1" "$APP_JAR.new" && sudo test -s "$APP_JAR.new" && return 0
+  sudo rm -f "$APP_JAR.new"
+  return 1
+}
+
+# 같은 폴더 안의 mv는 원자적이라 반쯤 복사된 jar가 app.jar가 되는 일이 없다.
+# 실행 중인 jar를 바꾸면 종료 중인 프로세스가 NoClassDefFoundError를 낼 수 있어 먼저 멈춘다.
+swap_and_start() {
+  sudo systemctl stop sahmhoot && sudo mv -f "$APP_JAR.new" "$APP_JAR" && sudo systemctl start sahmhoot
+}
+
+rollback() { # $1 DB 백업 경로
+  sudo test -s "$APP_JAR.bak" || die "되돌릴 이전 jar가 없습니다. 서버를 직접 확인하세요. DB 백업: $1"
+  log "이전 jar로 되돌립니다"
+  if stage_jar "$APP_JAR.bak" && swap_and_start && wait_healthy; then
+    die "새 버전 배포에 실패해 이전 버전으로 되돌렸습니다(정상). 새 마이그레이션이 적용됐을 수 있으니 필요하면 $1 으로 DB를 복원하세요."
+  fi
+  die "이전 버전도 정상이 아닙니다. 서버를 직접 확인하세요. DB 백업: $1"
 }
 
 build_backend() {
@@ -101,24 +117,22 @@ release_backend() {
   sudo find "$BACKUP_DIR" -name 'predeploy-*.sql.gz' -mtime +14 -delete
   log "DB 백업: $backup"
 
-  if sudo test -f "$APP_JAR"; then sudo cp -p "$APP_JAR" "$APP_JAR.bak"; fi
+  # 비어 있는 jar(이전 배포가 중간에 끊긴 경우 등)로 정상본 .bak을 덮지 않는다.
+  if sudo test -s "$APP_JAR"; then
+    sudo cp -p "$APP_JAR" "$APP_JAR.bak.tmp" && sudo mv -f "$APP_JAR.bak.tmp" "$APP_JAR.bak"
+  fi
+  stage_jar "$NEW_JAR" || die "새 jar를 준비하지 못했습니다(디스크 공간 확인). 서비스는 그대로입니다."
   log "백엔드 교체·재시작"
-  restart_with "$NEW_JAR"
-  if wait_healthy; then
+  # 멈춤·교체·시작·상태 확인 중 어느 것이 실패해도 되돌리기로 간다.
+  if swap_and_start && wait_healthy; then
     log "백엔드 정상(UP)"
     DEPLOYED="$DEPLOYED backend=$(git -C "$BACKEND_DIR" rev-parse --short HEAD)"
     return
   fi
 
-  log "새 버전이 ${HEALTH_WAIT_SECONDS}초 안에 정상이 되지 않았습니다. 최근 로그:"
+  log "새 버전이 정상이 되지 않았습니다(교체·시작 실패 또는 ${HEALTH_WAIT_SECONDS}초 안에 UP 아님). 최근 로그:"
   sudo journalctl -u sahmhoot -n 40 --no-pager || true
-  sudo test -f "$APP_JAR.bak" || die "되돌릴 이전 jar가 없습니다. 서버를 직접 확인하세요. DB 백업: $backup"
-  log "이전 jar로 되돌립니다"
-  restart_with "$APP_JAR.bak"
-  if wait_healthy; then
-    die "새 버전 배포에 실패해 이전 버전으로 되돌렸습니다(정상). 새 마이그레이션이 적용됐을 수 있으니 필요하면 $backup 으로 DB를 복원하세요."
-  fi
-  die "이전 버전도 정상이 아닙니다. 서버를 직접 확인하세요. DB 백업: $backup"
+  rollback "$backup"
 }
 
 release_frontend() {

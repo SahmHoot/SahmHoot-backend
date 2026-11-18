@@ -17,8 +17,14 @@ check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
 # --- 가짜 명령 ---
 mkdir -p "$T/bin"
 stub() { printf '#!/bin/sh\n%s\n' "$2" > "$T/bin/$1"; chmod +x "$T/bin/$1"; }
-stub sudo 'exec "$@"'
-stub systemctl 'echo "$*" >> "$STUB_LOG"'
+# CP_FAIL: 새 jar 준비 복사가 중간에 끊긴다(대상이 0바이트로 남고 실패). 디스크 부족 흉내.
+stub sudo 'if [ -n "${CP_FAIL:-}" ] && [ "$1" = cp ] && [ "${3##*/}" = app.jar.new ]; then : > "$3"; exit 1; fi
+exec "$@"'
+# START_FAIL_JAR: app.jar 내용이 이 값이면 start가 실패한다.
+stub systemctl 'echo "$*" >> "$STUB_LOG"
+jar="$SAHMHOOT_DEPLOY_PREFIX/opt/sahmhoot/app.jar"
+if [ "$1" = start ] && [ -n "${START_FAIL_JAR:-}" ] && [ "$(cat "$jar")" = "$START_FAIL_JAR" ]; then exit 1; fi
+exit 0'
 stub journalctl 'echo "(가짜 로그)"'
 stub mysqldump 'echo "-- fake dump"'
 stub flock 'exit 0'
@@ -92,6 +98,7 @@ if run all develop; then pass "종료 코드 0"; else fail "종료 코드 0"; ca
 check "app.jar가 새 버전(v2)" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = v2 ]'
 check "이전 jar를 app.jar.bak으로 보관" '[ "$(cat "$R/opt/sahmhoot/app.jar.bak")" = old ]'
 check "-plain.jar는 쓰지 않음" '! grep -q plain "$R/opt/sahmhoot/app.jar"'
+check "임시 파일(app.jar.new)을 남기지 않음" '[ ! -e "$R/opt/sahmhoot/app.jar.new" ]'
 check "중지 → 시작 순서" '[ "$(cat "$STUB_LOG")" = "$(printf "stop sahmhoot\nstart sahmhoot")" ]'
 BK="$(ls "$R"/var/backups/sahmhoot/predeploy-*.sql.gz 2>/dev/null | head -1)"
 check "DB 백업 파일 생성" '[ -n "$BK" ] && gunzip -c "$BK" | grep -q "fake dump"'
@@ -108,6 +115,34 @@ check "app.jar가 이전 버전(v2)으로 복구" '[ "$(cat "$R/opt/sahmhoot/app
 check "되돌렸다고 안내" 'grep -q "이전 버전으로 되돌렸습니다" "$T/out"'
 check "중지·시작을 두 번(교체, 복구)" '[ "$(grep -c . "$STUB_LOG")" = 4 ]'
 check "실패한 배포는 기록하지 않음" '! grep -q "backend develop" "$R/var/log/sahmhoot-deploy.log"'
+
+echo "2-1. 새 jar 준비(복사)가 중간에 실패하면 서비스를 멈추지 않는다"
+publish backend v3-nospace
+: > "$STUB_LOG"
+BEFORE="$(cat "$R/opt/sahmhoot/app.jar")"
+if CP_FAIL=1 run backend develop; then fail "실패로 끝나야 함"; else pass "실패로 끝남"; fi
+check "서비스를 건드리지 않음" '[ ! -s "$STUB_LOG" ]'
+check "app.jar 그대로" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = "$BEFORE" ]'
+check "반쯤 복사된 임시 파일을 지움" '[ ! -e "$R/opt/sahmhoot/app.jar.new" ]'
+check "서비스는 그대로라고 안내" 'grep -q "서비스는 그대로" "$T/out"'
+
+echo "2-2. 새 버전 시작(systemctl start)이 실패해도 이전 버전으로 되돌린다"
+publish backend v3-nostart
+: > "$STUB_LOG"
+BEFORE="$(cat "$R/opt/sahmhoot/app.jar")"
+if START_FAIL_JAR=v3-nostart run backend develop; then fail "실패로 끝나야 함"; else pass "실패로 끝남"; fi
+check "app.jar가 이전 버전으로 복구" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = "$BEFORE" ]'
+check "되돌렸다고 안내" 'grep -q "이전 버전으로 되돌렸습니다" "$T/out"'
+check "중지·시작을 두 번(교체, 복구)" '[ "$(grep -c . "$STUB_LOG")" = 4 ]'
+
+echo "2-3. app.jar가 비어 있으면 정상본 .bak을 덮지 않는다"
+GOOD="$(cat "$R/opt/sahmhoot/app.jar")"
+cp "$R/opt/sahmhoot/app.jar" "$R/opt/sahmhoot/app.jar.bak"
+: > "$R/opt/sahmhoot/app.jar"
+publish backend v3-broken-again
+if FAIL_JAR=v3-broken-again run backend develop; then fail "실패로 끝나야 함"; else pass "실패로 끝남"; fi
+check ".bak이 정상본 그대로" '[ "$(cat "$R/opt/sahmhoot/app.jar.bak")" = "$GOOD" ]'
+check "app.jar가 정상본으로 복구" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = "$GOOD" ]'
 
 echo "3. 필수 키가 없거나 prod가 아니면 아무것도 바꾸지 않고 멈춘다"
 grep -v '^APP_ROOM_JOIN_BASE_URL=' "$R/etc/sahmhoot.env" > "$T/env" && mv "$T/env" "$R/etc/sahmhoot.env"
