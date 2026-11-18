@@ -7,12 +7,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.jayway.jsonpath.JsonPath;
 import com.sahmhoot.auth.verification.EmailVerificationStore;
+import com.sahmhoot.auth.verification.VerificationMailSender;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,6 +27,7 @@ class AuthFlowTest {
 
   @Autowired private MockMvc mockMvc;
   @Autowired private EmailVerificationStore store;
+  @MockitoBean private VerificationMailSender mailSender;
 
   private ResultActions postJson(String url, String body) throws Exception {
     return mockMvc.perform(post(url).contentType(MediaType.APPLICATION_JSON).content(body));
