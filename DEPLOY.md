@@ -99,7 +99,7 @@ flowchart LR
 
 ## 재배포
 
-레포의 [`deploy/deploy.sh`](deploy/deploy.sh)로 한 번에 한다. 소스 폴더의 주인인 관리자 계정으로 실행한다. 재시작하는 동안 API·WebSocket이 잠시 끊기므로 **수업 중에는 배포하지 않는다.**
+레포의 [`deploy/deploy.sh`](deploy/deploy.sh)로 한 번에 한다. **배포는 담당자 한 명이 소스 폴더(`~/sahmhoot/backend`, `~/sahmhoot/frontend`)의 주인인 관리자 계정으로만 한다.** 다른 계정에는 소스 폴더가 없어 스크립트가 돌지 않는다. 주인 계정은 서버에서 `stat -c %U ~<계정>/sahmhoot/backend`로 확인한다. 재시작하는 동안 API·WebSocket이 잠시 끊기므로 **수업 중에는 배포하지 않는다.**
 
 ```bash
 # 내 PC에서 (계정은 서버 관리자 계정)
@@ -114,7 +114,7 @@ tail -f ~/sahmhoot/deploy-last.log
 
 - 접속이 끊겨도 스크립트는 끝까지 실행된다. 화면에는 안내 줄만 나오고, 빌드 출력과 실패 시 서비스 로그는 `~/sahmhoot/deploy-last.log`에 남는다.
 
-- 대상: `all`(백엔드 → 프론트 순서), `backend`, `frontend`. 브랜치나 태그를 생략하면 `develop`이다. 최종 배포(#33)는 `deploy.sh all v1.0.0`처럼 태그로 한다.
+- 대상: `all`(백엔드 → 프론트 순서), `backend`, `frontend`. 브랜치나 태그를 생략하면 `develop`이다. 같은 이름을 두 저장소에 함께 쓰므로, 백엔드에만 있는 브랜치는 `backend <브랜치>`와 `frontend develop`으로 나눠 실행한다. 최종 배포(#33)는 `deploy.sh all v1.0.0`처럼 태그로 한다.
 - 스크립트가 하는 일: 비밀번호 없는 sudo·프론트 배포 폴더·필수 환경변수 확인 → 소스를 원격 브랜치·태그의 커밋에 맞춤 → 백엔드·프론트 빌드 → DB 백업(`/var/backups/sahmhoot`) → 지금 JAR를 `app.jar.bak`으로 보관 → 새 JAR를 `app.jar.new`로 준비한 뒤 멈춤·교체·시작 → `/api/health`가 90초 안에 UP인지 확인 → 프론트 복사 → `/var/log/sahmhoot-deploy.log`에 기록. 빌드가 모두 끝난 뒤에만 서비스를 바꾸므로, 빌드가 실패하면 운영 중인 서버는 그대로다.
 - 교체·시작이 실패하거나 새 버전이 UP이 되지 않으면 `app.jar.bak`(직전 버전)으로 되돌리고 실패로 끝난다. 새 JAR 준비(복사)나 DB 백업이 실패하면 서비스를 멈추기 전에 끝난다. DB는 되돌리지 않는다. Flyway 마이그레이션은 기동할 때 적용되므로, 필요하면 백업 파일로 복원한다(아래 "백업").
 - 멈추는 경우: sudo가 비밀번호를 요구할 때, 필수 키가 없거나 비었거나 중복일 때, 서버 소스 폴더에 커밋하지 않은 변경이 있을 때, 브랜치·태그가 없을 때, 다른 배포가 진행 중일 때.
