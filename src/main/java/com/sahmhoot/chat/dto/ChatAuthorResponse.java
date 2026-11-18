@@ -1,3 +1,3 @@
 package com.sahmhoot.chat.dto;
 
-public record ChatAuthorResponse(String email) {}
+public record ChatAuthorResponse(Long participantId, String nickname, String email) {}

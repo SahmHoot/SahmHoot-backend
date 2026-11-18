@@ -228,19 +228,22 @@ class ChatMessagingIntegrationTest {
           List.of("GET", "/messages/" + here.getId() + "/author"),
           List.of("GET", "/messages/-1/author"),
           List.of("DELETE", "/messages/" + here.getId()),
-          List.of("PUT", "/restrictions/" + studentParticipantId),
-          List.of("DELETE", "/restrictions/" + studentParticipantId))) {
+          List.of("DELETE", "/messages/-1"))) {
         assertModerationError(nonOwner, request.getFirst(), request.getLast(), 403, "FORBIDDEN");
       }
+      for (long target : List.of(studentParticipantId, -1L)) {
+        assertModerationError(changeRestriction(nonOwner, target, true), 403, "FORBIDDEN");
+        assertModerationError(changeRestriction(nonOwner, target, false), 403, "FORBIDDEN");
+      }
     }
-    assertModerationError(owner, "PUT", "/restrictions/" + ownerParticipantId, 400, "CANNOT_BLOCK_OWNER");
+    assertModerationError(changeRestriction(owner, ownerParticipantId, true), 400, "CANNOT_BLOCK_OWNER");
     for (long unavailable : List.of(otherParticipant, -1L)) {
-      assertModerationError(owner, "PUT", "/restrictions/" + unavailable, 403, "NOT_PARTICIPANT");
-      assertModerationError(owner, "DELETE", "/restrictions/" + unavailable, 403, "NOT_PARTICIPANT");
+      assertModerationError(changeRestriction(owner, unavailable, true), 404, "PARTICIPANT_NOT_FOUND");
+      assertModerationError(changeRestriction(owner, unavailable, false), 404, "PARTICIPANT_NOT_FOUND");
     }
     for (long unavailable : List.of(foreign.getId(), -1L)) {
-      assertModerationError(owner, "GET", "/messages/" + unavailable + "/author", 400, "VALIDATION_FAILED");
-      assertModerationError(owner, "DELETE", "/messages/" + unavailable, 400, "VALIDATION_FAILED");
+      assertModerationError(owner, "GET", "/messages/" + unavailable + "/author", 404, "MESSAGE_NOT_FOUND");
+      assertModerationError(owner, "DELETE", "/messages/" + unavailable, 404, "MESSAGE_NOT_FOUND");
     }
     assertThat(restrictionCount(room, studentParticipantId)).isZero();
     assertThat(messages.findById(here.getId()).orElseThrow().getDeletedAt()).isNull();
@@ -262,9 +265,7 @@ class ChatMessagingIntegrationTest {
     var otherRoomStatus = subscribe(one, "/user/queue/rooms/" + otherRoom.getId() + "/me");
     var errors = subscribe(one, "/user/queue/errors");
     var broadcast = subscribe(one, chatTopic());
-    String path = "/restrictions/" + studentParticipantId;
-
-    assertThat(moderate(owner, "PUT", path).statusCode()).isEqualTo(204);
+    assertRestrictionResponse(changeRestriction(owner, studentParticipantId, true), true);
     var restricted = take(oneStatus);
     assertThat(take(twoStatus)).isEqualTo(restricted);
     assertThat(restricted.path("type").asText()).isEqualTo("MY_STATUS");
@@ -273,18 +274,18 @@ class ChatMessagingIntegrationTest {
     assertThat(restrictionCount(room, studentParticipantId)).isEqualTo(1);
     assertThat(state(student).path("me").path("chatBlocked").asBoolean()).isTrue();
 
-    assertThat(moderate(owner, "PUT", path).statusCode()).isEqualTo(204);
+    assertRestrictionResponse(changeRestriction(owner, studentParticipantId, true), true);
     send(one, "전송이 제한된 메시지");
     assertThat(take(errors).path("code").asText()).isEqualTo("CHAT_BLOCKED");
     assertThat(broadcast.poll(250, TimeUnit.MILLISECONDS)).isNull();
     assertThat(messageCount()).isZero();
 
-    assertThat(moderate(owner, "DELETE", path).statusCode()).isEqualTo(204);
+    assertRestrictionResponse(changeRestriction(owner, studentParticipantId, false), false);
     var released = take(oneStatus);
     assertThat(take(twoStatus)).isEqualTo(released);
     assertThat(released.path("type").asText()).isEqualTo("MY_STATUS");
     assertThat(released.path("chatBlocked").asBoolean()).isFalse();
-    assertThat(moderate(owner, "DELETE", path).statusCode()).isEqualTo(204);
+    assertRestrictionResponse(changeRestriction(owner, studentParticipantId, false), false);
     assertThat(restrictionCount(room, studentParticipantId)).isZero();
     assertThat(restrictionCount(otherRoom, otherParticipant)).isEqualTo(1);
     assertThat(state(student).path("me").path("chatBlocked").asBoolean()).isFalse();
@@ -347,7 +348,10 @@ class ChatMessagingIntegrationTest {
 
     var response = moderate(owner, "GET", path + "/author");
     assertThat(response.statusCode()).isEqualTo(200);
-    assertThat(json.readTree(response.body()).path("email").asText()).isEqualTo(student.getEmail());
+    var author = json.readTree(response.body());
+    assertThat(author.path("participantId").asLong()).isEqualTo(studentParticipantId);
+    assertThat(author.path("nickname").asText()).isEqualTo("익명학생");
+    assertThat(author.path("email").asText()).isEqualTo(student.getEmail());
     assertModerationError(student, "GET", path + "/author", 403, "FORBIDDEN");
     var snapshot = state(student);
     for (String list : List.of("recentMessages", "pinnedMessages")) {
@@ -382,7 +386,7 @@ class ChatMessagingIntegrationTest {
     var status = subscribe(connect(student), personalTopic());
     probe.rejectRestrictionRoom = room.getId();
 
-    assertModerationError(owner, "PUT", "/restrictions/" + studentParticipantId, 500, "INTERNAL_ERROR");
+    assertModerationError(changeRestriction(owner, studentParticipantId, true), 500, "INTERNAL_ERROR");
     assertThat(restrictionCount(room, studentParticipantId)).isZero();
     assertThat(status.poll(250, TimeUnit.MILLISECONDS)).isNull();
   }
@@ -693,7 +697,7 @@ class ChatMessagingIntegrationTest {
       assertThat(gate.publishing.await(7, TimeUnit.SECONDS)).isTrue();
       var restricting = executor.submit(() -> {
         restrictionStarted.countDown();
-        moderation.restrict(room.getId(), owner.getId(), studentParticipantId);
+        moderation.updateRestriction(room.getId(), owner.getId(), studentParticipantId, true);
       });
       assertThat(restrictionStarted.await(7, TimeUnit.SECONDS)).isTrue();
       assertThatThrownBy(() -> restricting.get(200, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
@@ -877,16 +881,37 @@ class ChatMessagingIntegrationTest {
   }
 
   private HttpResponse<String> moderate(User actor, String method, String path) throws Exception {
-    var url = URI.create("http://localhost:" + port + "/api/rooms/" + room.getId() + "/chat" + path);
-    var request = HttpRequest.newBuilder(url)
-        .header("Authorization", "Bearer " + jwt.issue(actor.getId(), actor.getRole()).accessToken())
-        .method(method, HttpRequest.BodyPublishers.noBody()).build();
+    var request = moderationRequest(actor, path).method(method, HttpRequest.BodyPublishers.noBody()).build();
     return http.send(request, HttpResponse.BodyHandlers.ofString());
+  }
+
+  private HttpResponse<String> changeRestriction(User actor, long target, boolean blocked) throws Exception {
+    var request = moderationRequest(actor, "/participants/" + target).header("Content-Type", "application/json")
+        .method("PATCH", HttpRequest.BodyPublishers.ofString("{\"chatBlocked\":" + blocked + "}")).build();
+    return http.send(request, HttpResponse.BodyHandlers.ofString());
+  }
+
+  private HttpRequest.Builder moderationRequest(User actor, String path) {
+    var url = URI.create("http://localhost:" + port + "/api/rooms/" + room.getId() + path);
+    return HttpRequest.newBuilder(url)
+        .header("Authorization", "Bearer " + jwt.issue(actor.getId(), actor.getRole()).accessToken());
+  }
+
+  private void assertRestrictionResponse(HttpResponse<String> response, boolean blocked) {
+    assertThat(response.statusCode()).isEqualTo(200);
+    var body = json.readTree(response.body());
+    assertThat(body.path("participantId").asLong()).isEqualTo(studentParticipantId);
+    assertThat(body.path("nickname").asText()).isEqualTo("익명학생");
+    assertThat(body.path("chatBlocked").isBoolean()).isTrue();
+    assertThat(body.path("chatBlocked").asBoolean()).isEqualTo(blocked);
   }
 
   private void assertModerationError(User actor, String method, String path, int status, String code)
       throws Exception {
-    var response = moderate(actor, method, path);
+    assertModerationError(moderate(actor, method, path), status, code);
+  }
+
+  private void assertModerationError(HttpResponse<String> response, int status, String code) {
     assertThat(response.statusCode()).isEqualTo(status);
     var body = json.readTree(response.body());
     assertThat(body.path("code").asText()).isEqualTo(code);

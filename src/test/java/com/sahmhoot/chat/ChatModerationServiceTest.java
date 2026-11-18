@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import com.sahmhoot.chat.dto.ChatAuthorResponse;
+import com.sahmhoot.chat.dto.ChatRestrictionResponse;
 import com.sahmhoot.chat.entity.ChatMessage;
 import com.sahmhoot.chat.entity.ChatRestrictionId;
 import com.sahmhoot.chat.event.ChatMessageDeletedEvent;
@@ -59,8 +60,8 @@ class ChatModerationServiceTest {
   @Test void allOperationsCheckOwnershipBeforeLookingUpTheTarget() {
     error(ChatErrorCode.FORBIDDEN, () -> moderation.author(ROOM, STUDENT, MESSAGE));
     error(ChatErrorCode.FORBIDDEN, () -> moderation.delete(ROOM, STUDENT, MESSAGE));
-    error(ChatErrorCode.FORBIDDEN, () -> moderation.restrict(ROOM, STUDENT, PARTICIPANT));
-    error(ChatErrorCode.FORBIDDEN, () -> moderation.release(ROOM, STUDENT, PARTICIPANT));
+    error(ChatErrorCode.FORBIDDEN, () -> moderation.updateRestriction(ROOM, STUDENT, PARTICIPANT, true));
+    error(ChatErrorCode.FORBIDDEN, () -> moderation.updateRestriction(ROOM, STUDENT, PARTICIPANT, false));
     verify(rooms, never()).findParticipants(any(), any());
     verifyNoInteractions(messages, authors, pins, restrictions, events);
   }
@@ -68,15 +69,15 @@ class ChatModerationServiceTest {
   @Test void refusesToRestrictTheOwnerBeforeCheckingExistingRestrictions() {
     when(rooms.findParticipants(ROOM, Set.of(100L)))
         .thenReturn(Map.of(100L, new ChatRoomPort.Participant(100L, OWNER, "교수")));
-    error(ChatErrorCode.CANNOT_BLOCK_OWNER, () -> moderation.restrict(ROOM, OWNER, 100L));
+    error(ChatErrorCode.CANNOT_BLOCK_OWNER, () -> moderation.updateRestriction(ROOM, OWNER, 100L, true));
     verifyNoInteractions(restrictions, events);
   }
 
   @Test void missingTargetsAreRejectedWithinTheRequestedRoom() {
-    error(ChatErrorCode.NOT_PARTICIPANT, () -> moderation.restrict(ROOM, OWNER, PARTICIPANT));
-    error(ChatErrorCode.NOT_PARTICIPANT, () -> moderation.release(ROOM, OWNER, PARTICIPANT));
-    error(ChatErrorCode.VALIDATION_FAILED, () -> moderation.author(ROOM, OWNER, MESSAGE));
-    error(ChatErrorCode.VALIDATION_FAILED, () -> moderation.delete(ROOM, OWNER, MESSAGE));
+    error(ChatErrorCode.PARTICIPANT_NOT_FOUND, () -> moderation.updateRestriction(ROOM, OWNER, PARTICIPANT, true));
+    error(ChatErrorCode.PARTICIPANT_NOT_FOUND, () -> moderation.updateRestriction(ROOM, OWNER, PARTICIPANT, false));
+    error(ChatErrorCode.MESSAGE_NOT_FOUND, () -> moderation.author(ROOM, OWNER, MESSAGE));
+    error(ChatErrorCode.MESSAGE_NOT_FOUND, () -> moderation.delete(ROOM, OWNER, MESSAGE));
     verifyNoInteractions(authors, pins, restrictions, events);
   }
 
@@ -88,9 +89,9 @@ class ChatModerationServiceTest {
     stubParticipant();
     when(authors.findEmail(STUDENT)).thenReturn(Optional.of("student@example.test"));
 
-    assertThat(moderation.author(ROOM, OWNER, MESSAGE)).isEqualTo(new ChatAuthorResponse("student@example.test"));
-    error(ChatErrorCode.ROOM_CLOSED, () -> moderation.restrict(ROOM, OWNER, PARTICIPANT));
-    error(ChatErrorCode.ROOM_CLOSED, () -> moderation.release(ROOM, OWNER, PARTICIPANT));
+    assertThat(moderation.author(ROOM, OWNER, MESSAGE)).isEqualTo(new ChatAuthorResponse(PARTICIPANT, "익명", "student@example.test"));
+    error(ChatErrorCode.ROOM_CLOSED, () -> moderation.updateRestriction(ROOM, OWNER, PARTICIPANT, true));
+    error(ChatErrorCode.ROOM_CLOSED, () -> moderation.updateRestriction(ROOM, OWNER, PARTICIPANT, false));
     error(ChatErrorCode.ROOM_CLOSED, () -> moderation.delete(ROOM, OWNER, MESSAGE));
     verifyNoInteractions(pins, restrictions, events);
   }
@@ -99,10 +100,10 @@ class ChatModerationServiceTest {
     stubParticipant();
     var id = new ChatRestrictionId(ROOM, PARTICIPANT);
     when(restrictions.existsById(id)).thenReturn(false, true, true, false);
-    moderation.restrict(ROOM, OWNER, PARTICIPANT);
-    moderation.restrict(ROOM, OWNER, PARTICIPANT);
-    moderation.release(ROOM, OWNER, PARTICIPANT);
-    moderation.release(ROOM, OWNER, PARTICIPANT);
+    for (boolean blocked : new boolean[] {true, true, false, false}) {
+      assertThat(moderation.updateRestriction(ROOM, OWNER, PARTICIPANT, blocked))
+          .isEqualTo(new ChatRestrictionResponse(PARTICIPANT, "익명", blocked));
+    }
 
     verify(restrictions).save(argThat(row -> row.getId().equals(id)
         && row.getRestrictedByUserId().equals(OWNER) && row.getRestrictedAt().equals(NOW)));

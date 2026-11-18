@@ -1,6 +1,7 @@
 package com.sahmhoot.chat.service;
 
 import com.sahmhoot.chat.dto.ChatAuthorResponse;
+import com.sahmhoot.chat.dto.ChatRestrictionResponse;
 import com.sahmhoot.chat.entity.ChatMessage;
 import com.sahmhoot.chat.entity.ChatRestriction;
 import com.sahmhoot.chat.entity.ChatRestrictionId;
@@ -18,6 +19,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Set;
+import java.util.function.Supplier;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -58,27 +60,21 @@ public class ChatModerationService {
     var sender = rooms.findParticipants(roomId, Set.of(message.getSenderParticipantId()))
         .get(message.getSenderParticipantId());
     if (sender == null) throw new ChatException(ChatErrorCode.INTERNAL_ERROR);
-    return new ChatAuthorResponse(authors.findEmail(sender.userId())
-        .orElseThrow(() -> new ChatException(ChatErrorCode.INTERNAL_ERROR)));
+    var email = authors.findEmail(sender.userId())
+        .orElseThrow(() -> new ChatException(ChatErrorCode.INTERNAL_ERROR));
+    return new ChatAuthorResponse(sender.id(), sender.nickname(), email);
   }
 
-  public void restrict(Long roomId, Long ownerId, Long participantId) {
-    changeRestriction(roomId, ownerId, participantId, true);
-  }
-
-  public void release(Long roomId, Long ownerId, Long participantId) {
-    changeRestriction(roomId, ownerId, participantId, false);
-  }
-
-  private void changeRestriction(Long roomId, Long ownerId, Long participantId, boolean blocked) {
-    write(roomId, () -> {
+  public ChatRestrictionResponse updateRestriction(Long roomId, Long ownerId, Long participantId, boolean blocked) {
+    return write(roomId, () -> {
       requireOpenRoomOwner(roomId, ownerId);
       var target = rooms.findParticipants(roomId, Set.of(participantId)).get(participantId);
-      if (target == null) throw new ChatException(ChatErrorCode.NOT_PARTICIPANT);
+      if (target == null) throw new ChatException(ChatErrorCode.PARTICIPANT_NOT_FOUND);
       if (blocked && ownerId.equals(target.userId())) throw new ChatException(ChatErrorCode.CANNOT_BLOCK_OWNER);
 
       var id = new ChatRestrictionId(roomId, participantId);
-      if (restrictions.existsById(id) == blocked) return;
+      var response = new ChatRestrictionResponse(target.id(), target.nickname(), blocked);
+      if (restrictions.existsById(id) == blocked) return response;
 
       Instant now = now();
       if (blocked) {
@@ -87,6 +83,7 @@ public class ChatModerationService {
         restrictions.deleteById(id);
       }
       events.publishEvent(ChatStatusChangedEvent.of(roomId, target.userId(), now, blocked));
+      return response;
     });
   }
 
@@ -95,15 +92,17 @@ public class ChatModerationService {
       requireOpenRoomOwner(roomId, ownerId);
       var message = requireMessage(roomId, messageId);
       Instant now = now();
-      if (!message.markDeleted(now)) return;
-      pins.removePin(roomId, messageId);
-      events.publishEvent(ChatMessageDeletedEvent.of(roomId, messageId, now));
+      if (message.markDeleted(now)) {
+        pins.removePin(roomId, messageId);
+        events.publishEvent(ChatMessageDeletedEvent.of(roomId, messageId, now));
+      }
+      return null;
     });
   }
 
   private ChatMessage requireMessage(Long roomId, Long messageId) {
     return messages.findByIdAndRoomId(messageId, roomId)
-        .orElseThrow(() -> new ChatException(ChatErrorCode.VALIDATION_FAILED));
+        .orElseThrow(() -> new ChatException(ChatErrorCode.MESSAGE_NOT_FOUND));
   }
 
   private ChatRoomPort.Room requireOwner(Long roomId, Long userId) {
@@ -116,12 +115,12 @@ public class ChatModerationService {
     if (requireOwner(roomId, userId).closed()) throw new ChatException(ChatErrorCode.ROOM_CLOSED);
   }
 
-  private void write(Long roomId, Runnable change) {
+  private <T> T write(Long roomId, Supplier<T> change) {
     if (TransactionSynchronizationManager.isActualTransactionActive()) {
       throw new IllegalStateException("Chat moderation requires the room lock before starting a transaction");
     }
     // 송신, 수업 종료와 같은 방 잠금을 커밋 및 이벤트 발행까지 유지한다.
-    locks.executeWithLock(roomId, () -> writing.executeWithoutResult(tx -> change.run()));
+    return locks.executeWithLock(roomId, () -> writing.execute(tx -> change.get()));
   }
 
   private Instant now() {
