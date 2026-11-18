@@ -10,6 +10,7 @@ import com.sahmhoot.room.exception.RoomException;
 import com.sahmhoot.room.repository.RoomParticipantRepository;
 import com.sahmhoot.room.repository.RoomRepository;
 import com.sahmhoot.room.service.port.RoomQuizStatePort;
+import com.sahmhoot.room.service.port.RoomReactionStatsPort;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
@@ -31,6 +32,7 @@ public class RoomStateService {
   private final RoomUserLookup users;
   private final RoomLockPort locks;
   private final RoomQuizStatePort quizzes;
+  private final RoomReactionStatsPort reactions;
   private final Clock clock;
   private final RoomPresenceService presence;
   private final String joinBaseUrl;
@@ -38,13 +40,14 @@ public class RoomStateService {
 
   public RoomStateService(RoomRepository rooms, RoomParticipantRepository participants,
       RoomUserLookup users, RoomLockPort locks, RoomQuizStatePort quizzes,
-      Clock clock, RoomPresenceService presence, PlatformTransactionManager transactions,
+      RoomReactionStatsPort reactions, Clock clock, RoomPresenceService presence, PlatformTransactionManager transactions,
       @Value("${app.room.join-base-url:http://localhost:5173}") String joinBaseUrl) {
     this.rooms = rooms;
     this.participants = participants;
     this.users = users;
     this.locks = locks;
     this.quizzes = quizzes;
+    this.reactions = reactions;
     this.clock = clock;
     this.presence = presence;
     this.joinBaseUrl = joinBaseUrl.replaceAll("/+$", "");
@@ -85,11 +88,14 @@ public class RoomStateService {
     String joinUrl = UriComponentsBuilder.fromUriString(joinBaseUrl)
         .pathSegment("join", room.getCode()).build().toUriString();
     int onlineCount = presence.onlineCount(room);
-    // 채팅·반응 모듈 연동 전의 빈 값. 접속 인원은 참여 기록 수와 구분한다.
-    return new RoomStateResponse(Instant.now(clock), new RoomDetail(roomId, room.getTitle(),
+    Instant serverTime = Instant.now(clock);
+    // 반응 집계는 serverTime 기준 최근 60초다. 이보다 늦은 REACTION_STATS만 클라이언트가 적용한다.
+    Map<String, Integer> reactionStats = owner ? reactions.recentCounts(roomId, serverTime) : null;
+    // 채팅 모듈 연동 전의 빈 값. 접속 인원은 참여 기록 수와 구분한다.
+    return new RoomStateResponse(serverTime, new RoomDetail(roomId, room.getTitle(),
         room.getStatus(), room.getCode(), joinUrl, ownerName), snapshot.quizRun(),
         new Me(participant.getId(), participant.getNickname(), owner, false), onlineCount, quiz,
-        null, List.of(), progress, owner ? Map.of() : null);
+        null, List.of(), progress, reactionStats);
   }
 
   private Quiz visibleQuiz(RoomQuizStatePort.Snapshot snapshot) {
