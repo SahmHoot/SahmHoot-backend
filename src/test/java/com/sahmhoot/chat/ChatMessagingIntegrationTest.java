@@ -334,6 +334,11 @@ class ChatMessagingIntegrationTest {
     assertThat(deletedEvent.path("type").asText()).isEqualTo("MESSAGE_DELETED");
     assertThat(deletedEvent.path("messageId").asLong()).isEqualTo(message.getId());
     assertThat(deletedEvent.size()).isEqualTo(3);
+    var unpinnedEvent = take(studentTopic);
+    assertThat(take(ownerTopic)).isEqualTo(unpinnedEvent);
+    assertThat(unpinnedEvent.path("type").asText()).isEqualTo("NOTICE_UNPINNED");
+    assertThat(unpinnedEvent.path("messageId").asLong()).isEqualTo(message.getId());
+    assertThat(unpinnedEvent.path("sentAt")).isEqualTo(deletedEvent.path("sentAt"));
     var deleted = messages.findById(message.getId()).orElseThrow();
     assertThat(deleted.getDeletedAt()).isNotNull();
     assertThat(deleted.getSenderParticipantId()).isEqualTo(studentParticipantId);
@@ -361,6 +366,78 @@ class ChatMessagingIntegrationTest {
       assertThat(visible.path("parentPreview").isNull()).isTrue();
       assertThat(visible.has("email")).isFalse();
     }
+  }
+
+  @Test void ownerPinsSeveralMessagesThatEveryoneReceivesAndReconnectRestoresInPinOrder() throws Exception {
+    var question = messages.saveAndFlush(new ChatMessage(room.getId(), studentParticipantId, "시험 범위요?",
+        null, Instant.now()));
+    var answer = messages.saveAndFlush(new ChatMessage(room.getId(), ownerParticipantId, "3장까지",
+        question.getId(), Instant.now()));
+    var studentTopic = subscribe(connect(student), chatTopic());
+    var ownerTopic = subscribe(connect(owner), chatTopic());
+
+    var pinned = pinRequest(owner, "PUT", answer.getId());
+    assertThat(pinned.statusCode()).isEqualTo(200);
+    var body = json.readTree(pinned.body());
+    assertThat(body.path("id").asLong()).isEqualTo(answer.getId());
+    assertThat(body.path("isOwner").asBoolean()).isTrue();
+    assertThat(body.path("parentPreview").asText()).isEqualTo("시험 범위요?");
+    assertThat(body.has("email")).isFalse();
+    var event = take(studentTopic);
+    assertThat(take(ownerTopic)).isEqualTo(event);
+    assertThat(event.path("type").asText()).isEqualTo("NOTICE_PINNED");
+    assertThat(event.path("message")).isEqualTo(body);
+    assertThat(event.size()).isEqualTo(3);
+
+    assertThat(pinRequest(owner, "PUT", question.getId()).statusCode()).isEqualTo(200);
+    assertThat(take(studentTopic).path("message").path("id").asLong()).isEqualTo(question.getId());
+    take(ownerTopic);
+    // 이미 고정된 메시지는 다시 발행하지 않고 처음 고정한 순서를 유지한다.
+    assertThat(pinRequest(owner, "PUT", answer.getId()).statusCode()).isEqualTo(200);
+    assertThat(studentTopic.poll(250, TimeUnit.MILLISECONDS)).isNull();
+    assertThat(pinnedIdsOf(state(student))).containsExactly(answer.getId(), question.getId());
+    assertThat(pinnedIdsOf(state(owner))).containsExactly(answer.getId(), question.getId());
+
+    assertThat(pinRequest(owner, "DELETE", answer.getId()).statusCode()).isEqualTo(204);
+    var unpinned = take(studentTopic);
+    assertThat(take(ownerTopic)).isEqualTo(unpinned);
+    assertThat(unpinned.path("type").asText()).isEqualTo("NOTICE_UNPINNED");
+    assertThat(unpinned.path("messageId").asLong()).isEqualTo(answer.getId());
+    assertThat(unpinned.size()).isEqualTo(3);
+    assertThat(pinRequest(owner, "DELETE", answer.getId()).statusCode()).isEqualTo(204);
+    assertThat(studentTopic.poll(250, TimeUnit.MILLISECONDS)).isNull();
+    assertThat(pinnedIdsOf(state(student))).containsExactly(question.getId());
+    assertThat(messages.findById(answer.getId()).orElseThrow().getDeletedAt()).isNull();
+  }
+
+  @Test void onlyTheOwnerOfAnOpenRoomCanPinUndeletedMessagesOfThatRoom() throws Exception {
+    var professor = user(Role.PROFESSOR, "다른 교수");
+    var otherRoom = room(professor);
+    join(room, professor, "다른 참가자");
+    var foreign = messages.saveAndFlush(new ChatMessage(otherRoom.getId(), join(otherRoom, student, "다른 방 학생"),
+        "다른 방 질문", null, Instant.now()));
+    var here = messages.saveAndFlush(new ChatMessage(room.getId(), studentParticipantId, "이 방 질문",
+        null, Instant.now()));
+    var deleted = messages.saveAndFlush(new ChatMessage(room.getId(), studentParticipantId, "지운 질문",
+        null, Instant.now()));
+    jdbc.update("UPDATE chat_messages SET deleted_at = UTC_TIMESTAMP(6) WHERE id = ?", deleted.getId());
+    var received = subscribe(connect(student), chatTopic());
+
+    for (User nonOwner : List.of(student, professor)) {
+      assertPinError(nonOwner, "PUT", here.getId(), 403, "FORBIDDEN");
+      assertPinError(nonOwner, "DELETE", here.getId(), 403, "FORBIDDEN");
+    }
+    assertPinError(owner, "PUT", foreign.getId(), 404, "MESSAGE_NOT_FOUND");
+    assertPinError(owner, "PUT", -1L, 404, "MESSAGE_NOT_FOUND");
+    assertPinError(owner, "PUT", deleted.getId(), 400, "MESSAGE_DELETED");
+    assertThat(pinnedIds()).isEmpty();
+
+    pin(here.getId());
+    management.close(room.getId(), owner.getId());
+    assertPinError(owner, "PUT", here.getId(), 409, "ROOM_CLOSED");
+    assertPinError(owner, "DELETE", here.getId(), 409, "ROOM_CLOSED");
+    assertThat(pinnedIds()).containsExactly(here.getId());
+    assertThat(received.poll(250, TimeUnit.MILLISECONDS)).isNull();
   }
 
   @Test void databaseFailureDuringPinRemovalRollsBackTheDeleteAndSuppressesBroadcast() throws Exception {
@@ -742,7 +819,10 @@ class ChatMessagingIntegrationTest {
       var event = take(topic);
       assertThat(event.path("type").asText()).isEqualTo("MESSAGE_DELETED");
       assertThat(event.path("messageId").asLong()).isEqualTo(message.getId());
-      assertThat(gate.publications.get()).isEqualTo(1);
+      assertThat(take(topic).path("type").asText()).isEqualTo("NOTICE_UNPINNED");
+      assertThat(topic.poll(250, TimeUnit.MILLISECONDS)).isNull();
+      // 첫 삭제의 MESSAGE_DELETED·NOTICE_UNPINNED만 나가고 두 번째 삭제는 아무것도 보내지 않는다.
+      assertThat(gate.publications.get()).isEqualTo(2);
       assertThat(messages.findById(message.getId()).orElseThrow().getDeletedAt()).isEqualTo(firstDeletedAt);
       assertThat(pinnedIds()).isEmpty();
     }
@@ -916,6 +996,26 @@ class ChatMessagingIntegrationTest {
     var body = json.readTree(response.body());
     assertThat(body.path("code").asText()).isEqualTo(code);
     assertThat(body.has("email")).isFalse();
+  }
+
+  private HttpResponse<String> pinRequest(User actor, String method, Long messageId) throws Exception {
+    var url = URI.create("http://localhost:" + port + "/api/rooms/" + room.getId() + "/pinned-messages/" + messageId);
+    var request = HttpRequest.newBuilder(url)
+        .header("Authorization", "Bearer " + jwt.issue(actor.getId(), actor.getRole()).accessToken())
+        .method(method, HttpRequest.BodyPublishers.noBody()).build();
+    return http.send(request, HttpResponse.BodyHandlers.ofString());
+  }
+
+  private void assertPinError(User actor, String method, Long messageId, int status, String code) throws Exception {
+    var response = pinRequest(actor, method, messageId);
+    assertThat(response.statusCode()).isEqualTo(status);
+    assertThat(json.readTree(response.body()).path("code").asText()).isEqualTo(code);
+  }
+
+  private List<Long> pinnedIdsOf(JsonNode snapshot) {
+    var ids = new ArrayList<Long>();
+    snapshot.path("pinnedMessages").forEach(message -> ids.add(message.path("id").asLong()));
+    return ids;
   }
 
   private JsonNode state(User user) throws Exception {

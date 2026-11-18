@@ -4,11 +4,15 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import com.sahmhoot.chat.dto.ChatAuthorResponse;
+import com.sahmhoot.chat.dto.ChatMessageResponse;
 import com.sahmhoot.chat.dto.ChatRestrictionResponse;
 import com.sahmhoot.chat.entity.ChatMessage;
+import com.sahmhoot.chat.entity.ChatPinId;
 import com.sahmhoot.chat.entity.ChatRestrictionId;
 import com.sahmhoot.chat.event.ChatMessageDeletedEvent;
 import com.sahmhoot.chat.event.ChatStatusChangedEvent;
+import com.sahmhoot.chat.event.NoticePinnedEvent;
+import com.sahmhoot.chat.event.NoticeUnpinnedEvent;
 import com.sahmhoot.chat.exception.ChatErrorCode;
 import com.sahmhoot.chat.exception.ChatException;
 import com.sahmhoot.chat.repository.ChatMessageRepository;
@@ -62,6 +66,8 @@ class ChatModerationServiceTest {
     error(ChatErrorCode.FORBIDDEN, () -> moderation.delete(ROOM, STUDENT, MESSAGE));
     error(ChatErrorCode.FORBIDDEN, () -> moderation.updateRestriction(ROOM, STUDENT, PARTICIPANT, true));
     error(ChatErrorCode.FORBIDDEN, () -> moderation.updateRestriction(ROOM, STUDENT, PARTICIPANT, false));
+    error(ChatErrorCode.FORBIDDEN, () -> moderation.pin(ROOM, STUDENT, MESSAGE));
+    error(ChatErrorCode.FORBIDDEN, () -> moderation.unpin(ROOM, STUDENT, MESSAGE));
     verify(rooms, never()).findParticipants(any(), any());
     verifyNoInteractions(messages, authors, pins, restrictions, events);
   }
@@ -93,6 +99,8 @@ class ChatModerationServiceTest {
     error(ChatErrorCode.ROOM_CLOSED, () -> moderation.updateRestriction(ROOM, OWNER, PARTICIPANT, true));
     error(ChatErrorCode.ROOM_CLOSED, () -> moderation.updateRestriction(ROOM, OWNER, PARTICIPANT, false));
     error(ChatErrorCode.ROOM_CLOSED, () -> moderation.delete(ROOM, OWNER, MESSAGE));
+    error(ChatErrorCode.ROOM_CLOSED, () -> moderation.pin(ROOM, OWNER, MESSAGE));
+    error(ChatErrorCode.ROOM_CLOSED, () -> moderation.unpin(ROOM, OWNER, MESSAGE));
     verifyNoInteractions(pins, restrictions, events);
   }
 
@@ -136,6 +144,61 @@ class ChatModerationServiceTest {
     verify(transactions).rollback(any());
     verifyNoInteractions(events);
     assertThat(locks.isLocked(ROOM)).isFalse();
+  }
+
+  @Test void deletingAPinnedMessagePublishesUnpinAfterTheDeletion() {
+    when(messages.findByIdAndRoomId(MESSAGE, ROOM)).thenReturn(Optional.of(message()));
+    when(pins.removePin(ROOM, MESSAGE)).thenReturn(1);
+    moderation.delete(ROOM, OWNER, MESSAGE);
+
+    var order = inOrder(events);
+    order.verify(events).publishEvent(ChatMessageDeletedEvent.of(ROOM, MESSAGE, NOW));
+    order.verify(events).publishEvent(NoticeUnpinnedEvent.of(ROOM, MESSAGE, NOW));
+    verifyNoMoreInteractions(events);
+  }
+
+  @Test void pinRejectsMissingAndDeletedMessagesWithoutSaving() {
+    error(ChatErrorCode.MESSAGE_NOT_FOUND, () -> moderation.pin(ROOM, OWNER, MESSAGE));
+    var deleted = message();
+    deleted.markDeleted(NOW);
+    when(messages.findByIdAndRoomId(MESSAGE, ROOM)).thenReturn(Optional.of(deleted));
+    error(ChatErrorCode.MESSAGE_DELETED, () -> moderation.pin(ROOM, OWNER, MESSAGE));
+    verifyNoInteractions(pins, events);
+  }
+
+  @Test void pinStoresOwnerAndTimeOnceAndPublishesTheRenderedMessage() {
+    when(messages.findByIdAndRoomId(MESSAGE, ROOM)).thenReturn(Optional.of(message()));
+    when(messages.findByIdAndRoomIdAndDeletedAtIsNull(499L, ROOM))
+        .thenReturn(Optional.of(new ChatMessage(ROOM, PARTICIPANT, "원본", null, NOW.minusSeconds(2))));
+    stubParticipant();
+    var id = new ChatPinId(ROOM, MESSAGE);
+    when(pins.existsById(id)).thenReturn(false, true);
+    var expected = new ChatMessageResponse(null, PARTICIPANT, "익명", false, "질문", 499L, "원본",
+        NOW.minusSeconds(1));
+
+    assertThat(moderation.pin(ROOM, OWNER, MESSAGE)).isEqualTo(expected);
+    assertThat(moderation.pin(ROOM, OWNER, MESSAGE)).isEqualTo(expected);
+
+    verify(pins).save(argThat(row -> row.getId().equals(id) && row.getPinnedByUserId().equals(OWNER)
+        && row.getPinnedAt().equals(NOW)));
+    verify(events).publishEvent(NoticePinnedEvent.of(ROOM, expected, NOW));
+    verifyNoMoreInteractions(events);
+  }
+
+  @Test void pinOmitsPreviewOfADeletedParent() {
+    when(messages.findByIdAndRoomId(MESSAGE, ROOM)).thenReturn(Optional.of(message()));
+    stubParticipant();
+    assertThat(moderation.pin(ROOM, OWNER, MESSAGE).parentPreview()).isNull();
+  }
+
+  @Test void unpinPublishesOnlyWhenAPinWasRemoved() {
+    when(pins.removePin(ROOM, MESSAGE)).thenReturn(1, 0);
+    moderation.unpin(ROOM, OWNER, MESSAGE);
+    moderation.unpin(ROOM, OWNER, MESSAGE);
+
+    verify(events).publishEvent(NoticeUnpinnedEvent.of(ROOM, MESSAGE, NOW));
+    verifyNoMoreInteractions(events);
+    verifyNoInteractions(messages);
   }
 
   private void stubParticipant() {
