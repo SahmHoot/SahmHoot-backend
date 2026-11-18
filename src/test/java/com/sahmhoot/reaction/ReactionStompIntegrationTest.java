@@ -3,6 +3,7 @@ package com.sahmhoot.reaction;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.sahmhoot.auth.jwt.JwtProvider;
+import com.sahmhoot.quiz.service.port.RoomLockPort;
 import com.sahmhoot.room.entity.Room;
 import com.sahmhoot.room.entity.RoomParticipant;
 import com.sahmhoot.room.repository.RoomParticipantRepository;
@@ -10,12 +11,14 @@ import com.sahmhoot.room.repository.RoomRepository;
 import com.sahmhoot.room.service.JoinCodeGenerator;
 import com.sahmhoot.room.service.RoomManagementService;
 import com.sahmhoot.room.service.RoomStateService;
+import com.sahmhoot.room.service.port.RoomReactionStatsPort;
 import com.sahmhoot.user.Role;
 import com.sahmhoot.user.User;
 import com.sahmhoot.user.UserRepository;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -58,6 +61,8 @@ class ReactionStompIntegrationTest {
   @Autowired RoomParticipantRepository participants;
   @Autowired RoomStateService roomState;
   @Autowired RoomManagementService roomManagement;
+  @Autowired RoomLockPort locks;
+  @Autowired RoomReactionStatsPort reactionStats;
   @Autowired JdbcTemplate jdbc;
 
   private final WebSocketStompClient client = new WebSocketStompClient(new StandardWebSocketClient());
@@ -172,6 +177,9 @@ class ReactionStompIntegrationTest {
     await(() -> !reactions.isEmpty());
 
     roomManagement.close(room.getId(), owner.getId());
+    // 종료 전에 보낸 ❓가 60초 안이어도 방 종료 정리로 집계가 비워져야 한다.
+    assertThat(locks.executeWithLock(room.getId(), () -> reactionStats.recentCounts(room.getId(), Instant.now())))
+        .allSatisfy((emoji, count) -> assertThat(count).isZero());
     send(studentSession, "{\"emoji\":\"❓\"}");
 
     await(() -> !errors.isEmpty());
