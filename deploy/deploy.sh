@@ -30,15 +30,34 @@ usage() {
   exit 1
 }
 
+# systemd EnvironmentFile이 실제로 쓰는 값으로 확인한다: 같은 키는 마지막 줄이 쓰이고,
+# 값은 앞뒤 공백과 감싼 따옴표를 뺀 것이다. 그래서 "", '', 공백만, 중복 키는 막는다.
+# 값은 awk 밖으로 꺼내지 않고 문제 있는 키 이름만 돌려준다.
 check_env() {
   sudo test -f "$ENV_FILE" || die "$ENV_FILE 이 없습니다."
-  local key missing=""
-  for key in $REQUIRED_KEYS; do
-    sudo grep -Eq "^${key}=.+" "$ENV_FILE" || missing="$missing $key"
-  done
-  [ -z "$missing" ] || die "$ENV_FILE 에 값이 없는 키:$missing (deploy/sahmhoot.env.example 참고)"
-  sudo grep -Eq "^SPRING_PROFILES_ACTIVE=[\"']?prod[\"']?$" "$ENV_FILE" \
-    || die "$ENV_FILE 의 SPRING_PROFILES_ACTIVE가 prod가 아닙니다."
+  local bad
+  bad="$(sudo awk -v req="$REQUIRED_KEYS SPRING_PROFILES_ACTIVE" -v q="'" '
+    /^[ \t]*([#;]|$)/ { next }
+    {
+      i = index($0, "="); if (i == 0) next
+      k = substr($0, 1, i - 1); v = substr($0, i + 1)
+      gsub(/^[ \t]+|[ \t]+$/, "", k); gsub(/^[ \t]+|[ \t]+$/, "", v)
+      f = substr(v, 1, 1)
+      if (length(v) >= 2 && (f == "\"" || f == q) && substr(v, length(v), 1) == f) v = substr(v, 2, length(v) - 2)
+      gsub(/^[ \t]+|[ \t]+$/, "", v)
+      n[k]++; val[k] = v
+    }
+    END {
+      m = split(req, r, " ")
+      for (j = 1; j <= m; j++) {
+        k = r[j]
+        if (n[k] > 1) print k "(중복)"
+        else if (val[k] == "") print k "(없음·빈 값)"
+      }
+      if (n["SPRING_PROFILES_ACTIVE"] == 1 && val["SPRING_PROFILES_ACTIVE"] != "" && val["SPRING_PROFILES_ACTIVE"] != "prod")
+        print "SPRING_PROFILES_ACTIVE(prod 아님)"
+    }' "$ENV_FILE" | tr '\n' ' ')" || die "$ENV_FILE 을 읽지 못했습니다."
+  [ -z "$bad" ] || die "$ENV_FILE 확인 필요: ${bad}(deploy/sahmhoot.env.example 참고)"
 }
 
 # 원격의 브랜치·태그가 가리키는 커밋으로 소스를 맞춘다. 서버에서 직접 고친 파일이 있으면 멈춘다.

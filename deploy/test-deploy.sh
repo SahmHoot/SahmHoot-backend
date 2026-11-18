@@ -156,6 +156,30 @@ if run backend develop; then fail "prod가 아니면 실패해야 함"; else pas
 check "프로필 안내" 'grep -q "SPRING_PROFILES_ACTIVE" "$T/out"'
 write_env
 
+echo "3-1. 실제로 쓰이는 값이 비었거나 키가 중복되면 멈춘다(systemd는 마지막 줄을 쓴다)"
+env_case() { # $1 설명 $2 덧붙일 줄 $3 replace면 같은 키를 먼저 지움
+  local key="${2%%=*}"
+  write_env
+  if [ "${3:-}" = replace ]; then
+    grep -v "^${2%%=*}=" "$R/etc/sahmhoot.env" > "$T/env" && mv "$T/env" "$R/etc/sahmhoot.env"
+  fi
+  printf '%s\n' "$2" >> "$R/etc/sahmhoot.env"
+  : > "$STUB_LOG"
+  if run backend develop; then fail "$1: 멈춰야 함"; else pass "$1: 멈춤"; fi
+  check "$1: 서비스를 건드리지 않음" '[ ! -s "$STUB_LOG" ]'
+  check "$1: 키 이름 안내" 'grep -q "$key" "$T/out"'
+}
+env_case '빈 큰따옴표' 'JWT_SECRET=""' replace
+env_case '빈 작은따옴표' "JWT_SECRET=''" replace
+env_case '공백만' 'JWT_SECRET=   ' replace
+env_case '정상 값 뒤에 빈 값' 'JWT_SECRET='
+env_case 'prod 뒤에 local' 'SPRING_PROFILES_ACTIVE=local'
+write_env
+grep -v '^JWT_SECRET=' "$R/etc/sahmhoot.env" > "$T/env" && mv "$T/env" "$R/etc/sahmhoot.env"
+printf '  JWT_SECRET = "%s"  \n' "$SECRET" >> "$R/etc/sahmhoot.env"
+if run backend develop; then pass "따옴표·공백으로 감싼 정상 값은 통과"; else fail "따옴표·공백으로 감싼 정상 값은 통과"; cat "$T/out"; fi
+write_env
+
 echo "4. 서버 소스에 커밋하지 않은 변경이 있으면 멈춘다"
 echo hotfix > "$T/srv/backend/hotfix.txt"
 if run backend develop; then fail "실패로 끝나야 함"; else pass "실패로 끝남"; fi
