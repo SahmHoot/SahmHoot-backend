@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.sahmhoot.SahmhootApplication;
 import com.sahmhoot.user.UserRepository;
+import jakarta.mail.internet.InternetAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -58,12 +59,16 @@ class VerificationSmtpIntegrationTest {
   @Test void smtpCodeSupportsSignupLoginAndTokenSurvivesApplicationRestart() throws Exception {
     postJson("/api/auth/email-verifications", "{\"email\":\"" + email + "\"}").andExpect(status().isNoContent());
     var mail = SMTP.take();
-    assertThat(mail.getFrom()[0].toString()).isEqualTo("sender@test.invalid");
+    assertThat(((InternetAddress) mail.getFrom()[0]).getAddress()).isEqualTo("sender@test.invalid");
+    assertThat(((InternetAddress) mail.getFrom()[0]).getPersonal()).isEqualTo("SahmHoot");
     assertThat(mail.getAllRecipients()[0].toString()).isEqualTo(email);
-    assertThat(mail.getSubject()).isEqualTo("[삼훗] 이메일 인증 코드");
-    var matcher = Pattern.compile("인증 코드: (\\d{6})").matcher((String) mail.getContent());
+    assertThat(mail.getSubject()).isEqualTo("[SahmHoot!] 이메일 인증번호 발송");
+    var matcher = Pattern.compile("인증번호: (\\d{6})").matcher(MimeContent.body(mail, "text/plain"));
     assertThat(matcher.find()).isTrue();
     String code = matcher.group(1);
+    assertThat(MimeContent.body(mail, "text/html"))
+        .contains(code, "SahmHoot!", "#2538d2", "#6577f0", "All rights reserved.")
+        .doesNotContain("{{verificationCode}}", "삼훗 가입을 위해", "이메일을 인증해 주세요");
     postJson("/api/auth/email-verifications/confirm", "{\"email\":\"" + email + "\",\"code\":\"" + code + "\"}")
         .andExpect(status().isNoContent());
     postJson("/api/auth/signup", "{\"email\":\"" + email + "\",\"code\":\"" + code
