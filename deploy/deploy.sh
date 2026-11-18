@@ -28,10 +28,21 @@ REQUIRED_KEYS="DB_USERNAME DB_PASSWORD JWT_SECRET CORS_ALLOWED_ORIGINS APP_ROOM_
 # 버퍼에 남아 다음 $(...) 결과에 섞이기 때문이다(시험 7에서 확인).
 to_terminal() { [ -z "${RUN_LOG:-}" ] || printf '%s\n' "$1" | { cat >&3; } 2>/dev/null || true; }
 log() { printf '[deploy] %s\n' "$*"; to_terminal "[deploy] $*"; }
-die() { printf '[deploy] 중단: %s\n' "$*" >&2; to_terminal "[deploy] 중단: $*"; exit 1; }
+die() { DIED=1; printf '[deploy] 중단: %s\n' "$*" >&2; to_terminal "[deploy] 중단: $*"; exit 1; }
+
+# die를 거치지 않고 set -e로 끝난 경우(빌드·git·복사 실패 등)에도 서비스 상태를 알려 준다.
+on_exit() {
+  local rc=$?
+  { [ "$rc" -eq 0 ] || [ -n "${DIED:-}" ]; } && return
+  local msg
+  msg="예상하지 못한 오류로 중단했습니다(종료 코드 $rc). sahmhoot 상태: $(sudo systemctl is-active sahmhoot 2>/dev/null || true). 자세한 내용: ${RUN_LOG:-위 출력}"
+  printf '[deploy] %s\n' "$msg" >&2
+  to_terminal "[deploy] $msg"
+}
 
 usage() {
   echo "사용법: $0 <all|backend|frontend> [브랜치 또는 태그(기본 develop)]" >&2
+  DIED=1
   exit 1
 }
 
@@ -115,7 +126,8 @@ rollback() { # $1 DB 백업 경로
 build_backend() {
   local f jars=()
   log "백엔드 빌드"
-  (cd "$BACKEND_DIR" && ./gradlew --quiet clean bootJar)
+  # 빌드가 끝나면 Gradle 데몬이 운영 서버 메모리에 남지 않게 한다.
+  (cd "$BACKEND_DIR" && ./gradlew --no-daemon --quiet clean bootJar)
   for f in "$BACKEND_DIR"/build/libs/*.jar; do
     case "$f" in *-plain.jar) ;; *) [ -f "$f" ] && jars+=("$f") ;; esac
   done
@@ -132,12 +144,13 @@ build_frontend() {
 release_backend() {
   local backup
   # Flyway 마이그레이션은 기동할 때 적용되므로 교체 전에 DB를 백업한다.
-  backup="$BACKUP_DIR/predeploy-$(date +%Y%m%d-%H%M%S).sql.gz"
+  # 같은 초에 만든 다른 백업을 덮거나 지우지 않게 프로세스 번호를 붙인다.
+  backup="$BACKUP_DIR/predeploy-$(date +%Y%m%d-%H%M%S)-$$.sql.gz"
   sudo mkdir -p "$BACKUP_DIR"
   sudo chmod 700 "$BACKUP_DIR"
   sudo bash -c 'set -o pipefail; umask 077
     mysqldump --single-transaction --routines --triggers --databases sahmhoot | gzip > "$1"' _ "$backup" \
-    || die "DB 백업에 실패해 배포하지 않았습니다."
+    || { sudo rm -f "$backup"; die "DB 백업에 실패해 배포하지 않았습니다. 서비스는 그대로입니다."; }
   sudo find "$BACKUP_DIR" -name 'predeploy-*.sql.gz' -mtime +14 -delete
   log "DB 백업: $backup"
 
@@ -160,7 +173,6 @@ release_backend() {
 }
 
 release_frontend() {
-  sudo test -d "$WEB_ROOT" || die "$WEB_ROOT 가 없습니다."
   # 이전 빌드 파일은 지우지 않는다. 이미 열려 있는 화면이 예전 파일을 계속 불러올 수 있게 하기 위해서다.
   sudo cp -a "$FRONTEND_DIR/dist/." "$WEB_ROOT/"
   log "프론트 반영 완료"
@@ -179,6 +191,7 @@ record() {
 main() {
   # ssh 접속이 끊겨도(HUP, 닫힌 출력의 PIPE) 중간에 죽지 않는다. 자식 명령에도 그대로 이어진다.
   trap '' HUP PIPE
+  trap on_exit EXIT
   TARGET="${1:-}"
   REF="${2:-develop}"
   DEPLOYED=""
@@ -204,6 +217,8 @@ main() {
 
   # 확인·소스 맞춤·빌드가 모두 끝난 뒤에만 실행 중인 서비스를 바꾼다.
   # 그래서 프론트 빌드가 실패해도 백엔드만 새 버전이 되는 일이 없다.
+  sudo -n true 2>/dev/null || die "비밀번호 없이 sudo를 쓸 수 있는 관리자 계정으로 실행하세요."
+  if $frontend; then sudo test -d "$WEB_ROOT" || die "$WEB_ROOT 가 없습니다."; fi
   if $backend; then check_env; checkout "$BACKEND_DIR"; fi
   if $frontend; then checkout "$FRONTEND_DIR"; fi
   if $backend; then build_backend; fi

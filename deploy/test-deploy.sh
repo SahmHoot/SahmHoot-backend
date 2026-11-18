@@ -18,15 +18,19 @@ check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
 mkdir -p "$T/bin"
 stub() { printf '#!/bin/sh\n%s\n' "$2" > "$T/bin/$1"; chmod +x "$T/bin/$1"; }
 # CP_FAIL: 새 jar 준비 복사가 중간에 끊긴다(대상이 0바이트로 남고 실패). 디스크 부족 흉내.
-stub sudo 'if [ -n "${CP_FAIL:-}" ] && [ "$1" = cp ] && [ "${3##*/}" = app.jar.new ]; then : > "$3"; exit 1; fi
+# SUDO_PASSWORD: 비밀번호를 요구하는 sudo 흉내(-n이면 실패).
+stub sudo 'if [ "$1" = -n ]; then [ -n "${SUDO_PASSWORD:-}" ] && exit 1; shift; fi
+if [ -n "${CP_FAIL:-}" ] && [ "$1" = cp ] && [ "${3##*/}" = app.jar.new ]; then : > "$3"; exit 1; fi
 exec "$@"'
-# START_FAIL_JAR: app.jar 내용이 이 값이면 start가 실패한다.
-stub systemctl 'echo "$*" >> "$STUB_LOG"
+# START_FAIL_JAR: app.jar 내용이 이 값이면 start가 실패한다. 상태 조회(is-active)는 기록하지 않는다.
+stub systemctl '[ "$1" = is-active ] && { echo active; exit 0; }
+echo "$*" >> "$STUB_LOG"
 jar="$SAHMHOOT_DEPLOY_PREFIX/opt/sahmhoot/app.jar"
 if [ "$1" = start ] && [ -n "${START_FAIL_JAR:-}" ] && [ "$(cat "$jar")" = "$START_FAIL_JAR" ]; then exit 1; fi
 exit 0'
 stub journalctl 'echo "(가짜 로그)"'
-stub mysqldump 'echo "-- fake dump"'
+# DUMP_FAIL: 덤프가 일부만 쓰고 실패한다.
+stub mysqldump 'echo "-- fake dump"; [ -z "${DUMP_FAIL:-}" ]'
 stub flock 'exit 0'
 stub sleep 'exit 0'
 stub curl 'jar="$SAHMHOOT_DEPLOY_PREFIX/opt/sahmhoot/app.jar"
@@ -198,6 +202,35 @@ BEFORE="$(cat "$R/opt/sahmhoot/app.jar")"
 if NPM_FAIL=1 run all develop; then fail "실패로 끝나야 함"; else pass "실패로 끝남"; fi
 check "서비스를 건드리지 않음" '[ ! -s "$STUB_LOG" ]'
 check "app.jar 그대로" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = "$BEFORE" ]'
+check "예상하지 못한 중단도 서비스 상태와 함께 안내" 'grep -q "예상하지 못한 오류로 중단.*sahmhoot 상태: active" "$T/out"'
+
+echo "6-1. DB 백업이 실패하면 서비스를 바꾸지 않고 불완전한 백업 파일을 남기지 않는다"
+: > "$STUB_LOG"
+BACKUPS="$(ls "$R"/var/backups/sahmhoot | wc -l | tr -d ' ')"
+if DUMP_FAIL=1 run backend develop; then fail "실패로 끝나야 함"; else pass "실패로 끝남"; fi
+check "서비스를 건드리지 않음" '[ ! -s "$STUB_LOG" ]'
+check "app.jar 그대로" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = "$BEFORE" ]'
+check "백업 파일 수 그대로" '[ "$(ls "$R"/var/backups/sahmhoot | wc -l | tr -d " ")" = "$BACKUPS" ]'
+check "백업 실패 안내" 'grep -q "DB 백업에 실패" "$T/out"'
+
+echo "6-2. 태그로 배포하면 태그 시점 커밋을 쓴다"
+for r in backend frontend; do git -C "$T/work/$r" tag v1.0.0 && git -C "$T/work/$r" push -q origin v1.0.0; done
+publish backend v4-after-tag
+if run all v1.0.0; then pass "종료 코드 0"; else fail "종료 코드 0"; cat "$T/out"; fi
+check "app.jar가 태그 시점(v4)" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = v4 ]'
+check "배포 기록에 태그" 'grep -q "all v1.0.0 backend=" "$R/var/log/sahmhoot-deploy.log"'
+
+echo "6-3. 프론트 배포 폴더가 없거나 sudo가 비밀번호를 요구하면 아무것도 바꾸지 않는다"
+: > "$STUB_LOG"
+BEFORE="$(cat "$R/opt/sahmhoot/app.jar")"
+mv "$R/var/www/sahmhoot" "$R/var/www/sahmhoot.off"
+if run all develop; then fail "폴더가 없으면 실패해야 함"; else pass "폴더가 없으면 실패"; fi
+check "서비스를 건드리지 않음" '[ ! -s "$STUB_LOG" ]'
+check "app.jar 그대로" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = "$BEFORE" ]'
+mv "$R/var/www/sahmhoot.off" "$R/var/www/sahmhoot"
+if SUDO_PASSWORD=1 run all develop; then fail "sudo 비밀번호가 필요하면 실패해야 함"; else pass "sudo 비밀번호가 필요하면 실패"; fi
+check "sudo 안내" 'grep -q "비밀번호 없이 sudo" "$T/out"'
+check "서비스를 건드리지 않음" '[ ! -s "$STUB_LOG" ]'
 
 echo "7. 화면 연결이 끊겨도(ssh 끊김) 배포를 끝까지 한다"
 RUN_LOG="$T/srv/deploy-last.log"
