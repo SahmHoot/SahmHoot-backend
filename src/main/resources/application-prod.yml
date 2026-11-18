@@ -1,0 +1,4 @@
+spring:
+  mail:
+    # GCP VM에서 실행하는 앱 → 같은 VM의 Postfix. 외부 릴레이는 Postfix가 담당한다.
+    host: ${MAIL_HOST:127.0.0.1}
