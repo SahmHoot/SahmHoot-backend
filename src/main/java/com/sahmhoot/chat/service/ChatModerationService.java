@@ -1,12 +1,17 @@
 package com.sahmhoot.chat.service;
 
 import com.sahmhoot.chat.dto.ChatAuthorResponse;
+import com.sahmhoot.chat.dto.ChatMessageResponse;
 import com.sahmhoot.chat.dto.ChatRestrictionResponse;
 import com.sahmhoot.chat.entity.ChatMessage;
+import com.sahmhoot.chat.entity.ChatPin;
+import com.sahmhoot.chat.entity.ChatPinId;
 import com.sahmhoot.chat.entity.ChatRestriction;
 import com.sahmhoot.chat.entity.ChatRestrictionId;
 import com.sahmhoot.chat.event.ChatMessageDeletedEvent;
 import com.sahmhoot.chat.event.ChatStatusChangedEvent;
+import com.sahmhoot.chat.event.NoticePinnedEvent;
+import com.sahmhoot.chat.event.NoticeUnpinnedEvent;
 import com.sahmhoot.chat.exception.ChatErrorCode;
 import com.sahmhoot.chat.exception.ChatException;
 import com.sahmhoot.chat.repository.ChatMessageRepository;
@@ -93,11 +98,53 @@ public class ChatModerationService {
       var message = requireMessage(roomId, messageId);
       Instant now = now();
       if (message.markDeleted(now)) {
-        pins.removePin(roomId, messageId);
+        boolean pinned = pins.removePin(roomId, messageId) > 0;
         events.publishEvent(ChatMessageDeletedEvent.of(roomId, messageId, now));
+        if (pinned) events.publishEvent(NoticeUnpinnedEvent.of(roomId, messageId, now));
       }
       return null;
     });
+  }
+
+  /** 이미 고정된 메시지는 처음 고정한 순서를 유지하고 다시 발행하지 않는다. */
+  public ChatMessageResponse pin(Long roomId, Long ownerId, Long messageId) {
+    return write(roomId, () -> {
+      requireOpenRoomOwner(roomId, ownerId);
+      var message = messages.findByIdAndRoomId(messageId, roomId)
+          .orElseThrow(() -> new ChatException(ChatErrorCode.MESSAGE_NOT_FOUND));
+      if (message.getDeletedAt() != null) throw new ChatException(ChatErrorCode.MESSAGE_DELETED);
+      var response = render(roomId, ownerId, message);
+      var id = new ChatPinId(roomId, messageId);
+      if (pins.existsById(id)) return response;
+      Instant now = now();
+      pins.save(new ChatPin(id, ownerId, now));
+      events.publishEvent(NoticePinnedEvent.of(roomId, response, now));
+      return response;
+    });
+  }
+
+  /** 고정되지 않은 메시지(없는 메시지 포함)의 해제는 바뀌는 것이 없어 발행 없이 성공한다. */
+  public void unpin(Long roomId, Long ownerId, Long messageId) {
+    write(roomId, () -> {
+      requireOpenRoomOwner(roomId, ownerId);
+      if (pins.removePin(roomId, messageId) > 0) {
+        events.publishEvent(NoticeUnpinnedEvent.of(roomId, messageId, now()));
+      }
+      return null;
+    });
+  }
+
+  private ChatMessageResponse render(Long roomId, Long ownerId, ChatMessage message) {
+    var sender = rooms.findParticipants(roomId, Set.of(message.getSenderParticipantId()))
+        .get(message.getSenderParticipantId());
+    if (sender == null) throw new ChatException(ChatErrorCode.INTERNAL_ERROR);
+    // state 복구와 같이 삭제된 원본의 미리보기는 보내지 않는다.
+    String parentPreview = message.getParentId() == null ? null
+        : messages.findByIdAndRoomIdAndDeletedAtIsNull(message.getParentId(), roomId)
+            .map(ChatMessage::getContent).orElse(null);
+    return new ChatMessageResponse(message.getId(), sender.id(), sender.nickname(),
+        ownerId.equals(sender.userId()), message.getContent(), message.getParentId(), parentPreview,
+        message.getCreatedAt());
   }
 
   private ChatMessage requireMessage(Long roomId, Long messageId) {

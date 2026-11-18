@@ -12,6 +12,7 @@ public enum ChatErrorCode {
   FORBIDDEN("권한이 없습니다."),
   CANNOT_BLOCK_OWNER("수업방 소유자는 채팅을 제한할 수 없습니다."),
   VALIDATION_FAILED("입력값 형식 오류입니다."),
+  MESSAGE_DELETED("삭제된 메시지는 고정할 수 없습니다."),
   INTERNAL_ERROR("서버 내부 오류가 발생했습니다.");
 
   private final String message;
