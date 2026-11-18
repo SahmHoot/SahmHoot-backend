@@ -47,7 +47,7 @@ public class VerificationMailSender {
       helper.setFrom(from, "SahmHoot");
       helper.setTo(email);
       helper.setSubject("[SahmHoot!] 이메일 인증번호 발송");
-      String plainText = "SahmHoot!\n\n인증번호: " + code
+      String plainText = "SahmHoot!\n수업 중 실시간 참여형 플랫폼\n\n인증번호: " + code
           + "\n\n인증번호는 10분 동안 유효합니다.\n본인이 요청하지 않았다면 이 메일을 무시해 주세요.";
       String html = new ClassPathResource("mail/verification-email.html").getContentAsString(StandardCharsets.UTF_8)
           .replace("{{verificationCode}}", HtmlUtils.htmlEscape(code));
