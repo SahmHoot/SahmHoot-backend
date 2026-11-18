@@ -40,9 +40,9 @@ class VerificationMailSenderTest {
     assertThat(((InternetAddress) message.getFrom()[0]).getPersonal()).isEqualTo("SahmHoot");
     assertThat(message.getAllRecipients()[0].toString()).isEqualTo("recipient@test.invalid");
     assertThat(message.getSubject()).isEqualTo("[SahmHoot!] 이메일 인증번호 발송");
-    assertThat(MimeContent.body(message, "text/plain")).contains("123456", "10분");
+    assertThat(MimeContent.body(message, "text/plain")).contains("123456", "10분", "수업 중 실시간 참여형 플랫폼");
     assertThat(MimeContent.body(message, "text/html"))
-        .contains("123456", "SahmHoot!", "#2538d2", "#6577f0", "All rights reserved.")
+        .contains("123456", "SahmHoot!", "수업 중 실시간 참여형 플랫폼", "#2538d2", "#6577f0", "All rights reserved.")
         .doesNotContain("{{verificationCode}}", "이메일을 인증해 주세요", "삼훗 가입을 위해");
   }
 
