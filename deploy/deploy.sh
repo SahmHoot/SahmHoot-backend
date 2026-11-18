@@ -158,7 +158,9 @@ release_backend() {
 
   # 비어 있는 jar(이전 배포가 중간에 끊긴 경우 등)로 정상본 .bak을 덮지 않는다.
   if sudo test -s "$APP_JAR"; then
-    sudo cp -p "$APP_JAR" "$APP_JAR.bak.tmp" && sudo mv -f "$APP_JAR.bak.tmp" "$APP_JAR.bak"
+    # && 목록 중간의 실패는 set -e가 잡지 않으므로 직접 멈춘다. 보관 없이 교체하면 되돌릴 곳이 없다.
+    { sudo cp -p "$APP_JAR" "$APP_JAR.bak.tmp" && sudo mv -f "$APP_JAR.bak.tmp" "$APP_JAR.bak"; } \
+      || { sudo rm -f "$APP_JAR.bak.tmp"; die "지금 jar를 보관하지 못했습니다(디스크 공간 확인). 서비스는 그대로입니다."; }
   fi
   stage_jar "$NEW_JAR" || die "새 jar를 준비하지 못했습니다(디스크 공간 확인). 서비스는 그대로입니다."
   log "백엔드 교체·재시작"

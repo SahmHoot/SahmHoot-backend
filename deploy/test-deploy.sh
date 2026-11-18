@@ -19,7 +19,9 @@ mkdir -p "$T/bin"
 stub() { printf '#!/bin/sh\n%s\n' "$2" > "$T/bin/$1"; chmod +x "$T/bin/$1"; }
 # CP_FAIL: 새 jar 준비 복사가 중간에 끊긴다(대상이 0바이트로 남고 실패). 디스크 부족 흉내.
 # SUDO_PASSWORD: 비밀번호를 요구하는 sudo 흉내(-n이면 실패).
+# BAK_CP_FAIL: 지금 jar를 .bak으로 보관하는 복사가 중간에 끊긴다.
 stub sudo 'if [ "$1" = -n ]; then [ -n "${SUDO_PASSWORD:-}" ] && exit 1; shift; fi
+if [ -n "${BAK_CP_FAIL:-}" ] && [ "$1" = cp ] && [ "${4##*/}" = app.jar.bak.tmp ]; then : > "$4"; exit 1; fi
 if [ -n "${CP_FAIL:-}" ] && [ "$1" = cp ] && [ "${3##*/}" = app.jar.new ]; then : > "$3"; exit 1; fi
 exec "$@"'
 # START_FAIL_JAR: app.jar 내용이 이 값이면 start가 실패한다. 상태 조회(is-active)는 기록하지 않는다.
@@ -148,6 +150,15 @@ publish backend v3-broken-again
 if FAIL_JAR=v3-broken-again run backend develop; then fail "실패로 끝나야 함"; else pass "실패로 끝남"; fi
 check ".bak이 정상본 그대로" '[ "$(cat "$R/opt/sahmhoot/app.jar.bak")" = "$GOOD" ]'
 check "app.jar가 정상본으로 복구" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = "$GOOD" ]'
+# 지금 jar를 .bak으로 보관하지 못하면 교체하지 않는다(되돌릴 곳이 없어지므로).
+echo "$GOOD-older" > "$R/opt/sahmhoot/app.jar.bak"
+publish backend v3-bak-fail
+: > "$STUB_LOG"
+if BAK_CP_FAIL=1 run backend develop; then fail "보관 실패면 실패해야 함"; else pass "보관 실패면 실패"; fi
+check "보관 실패 안내" 'grep -q "보관하지 못했습니다" "$T/out"'
+check "보관 실패 때 서비스를 건드리지 않음" '[ ! -s "$STUB_LOG" ]'
+check "보관 실패 때 app.jar 그대로" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = "$GOOD" ]'
+check "보관 실패 때 임시 파일 정리" '[ ! -e "$R/opt/sahmhoot/app.jar.bak.tmp" ]'
 
 echo "3. 필수 키가 없거나 prod가 아니면 아무것도 바꾸지 않고 멈춘다"
 grep -v '^APP_ROOM_JOIN_BASE_URL=' "$R/etc/sahmhoot.env" > "$T/env" && mv "$T/env" "$R/etc/sahmhoot.env"
