@@ -83,7 +83,10 @@ class VerificationSmtpIntegrationTest {
     // 별도 운영 프로파일 컨텍스트가 같은 DB·고정 JWT 설정으로 토큰을 다시 검증한다.
     try (var restarted = new SpringApplicationBuilder(SahmhootApplication.class).run(
         "--spring.profiles.active=test,prod", "--server.port=0", "--spring.main.banner-mode=off",
-        "--app.mail.from=sender@test.invalid", "--app.seed.enabled=false")) {
+        "--app.mail.from=sender@test.invalid", "--app.seed.enabled=false",
+        // prod 프로필은 기본값이 없으므로(application-prod.yml) 테스트 DB 계정과 주소를 직접 넘긴다.
+        "--spring.datasource.username=sahmhoot_user", "--spring.datasource.password=sahmhoot1!",
+        "--app.room.join-base-url=http://localhost:5173", "--app.cors.allowed-origins=http://localhost:5173")) {
       int port = ((WebServerApplicationContext) restarted).getWebServer().getPort();
       var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/users/me"))
           .header("Authorization", "Bearer " + token).GET().build();

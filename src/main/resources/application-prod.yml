@@ -1,4 +1,15 @@
+# 운영(prod) 프로필 전용. 값은 서버의 /etc/sahmhoot.env에서만 받는다(deploy/sahmhoot.env.example 참고).
+# application.yml의 기본값은 공개된 로컬 개발용이므로, 운영에서는 기본값 없이 받아 빠지면 기동이 멈추게 한다.
 spring:
+  datasource:
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
   mail:
     # GCP VM에서 실행하는 앱 → 같은 VM의 Postfix. 외부 릴레이는 Postfix가 담당한다.
     host: ${MAIL_HOST:127.0.0.1}
+
+app:
+  room:
+    join-base-url: ${APP_ROOM_JOIN_BASE_URL}
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS}
