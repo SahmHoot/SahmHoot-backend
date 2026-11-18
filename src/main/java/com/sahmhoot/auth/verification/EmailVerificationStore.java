@@ -27,7 +27,11 @@ public class EmailVerificationStore {
     entries.remove(email);
   }
 
-  /** 이메일별 항목. 같은 이메일은 이 객체로 동기화한다. */
+  public void remove(String email, Entry expected) {
+    entries.remove(email, expected);
+  }
+
+  /** 이메일별 항목. 상태 변경은 EmailVerificationService의 짧은 임계 구역에서 수행한다. */
   public static final class Entry {
     final String code;
     final Instant sentAt;
