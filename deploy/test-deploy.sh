@@ -199,7 +199,24 @@ if NPM_FAIL=1 run all develop; then fail "실패로 끝나야 함"; else pass "�
 check "서비스를 건드리지 않음" '[ ! -s "$STUB_LOG" ]'
 check "app.jar 그대로" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = "$BEFORE" ]'
 
-echo "7. 비밀값이 출력에 나오지 않는다"
+echo "7. 화면 연결이 끊겨도(ssh 끊김) 배포를 끝까지 한다"
+RUN_LOG="$T/srv/deploy-last.log"
+publish backend v5
+publish frontend f5
+RECORDS="$(grep -c . "$R/var/log/sahmhoot-deploy.log")"
+set +e; bash "$DEPLOY" all develop 2>&1 | head -n 1 > /dev/null; set -e
+check "새 백엔드(v5)로 교체" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = v5 ]'
+check "프론트 반영(f5)" '[ "$(cat "$R/var/www/sahmhoot/index.html")" = f5 ]'
+check "배포 기록 추가" '[ "$(grep -c . "$R/var/log/sahmhoot-deploy.log")" = $((RECORDS + 1)) ]'
+check "실행 로그에 완료까지 남음" 'grep -q "완료" "$RUN_LOG"'
+check "실행 로그는 주인만 읽기(600)" '[ -n "$(find "$RUN_LOG" -perm 600)" ]'
+publish backend v6-broken
+set +e; FAIL_JAR=v6-broken bash "$DEPLOY" backend develop 2>&1 | head -n 1 > /dev/null; set -e
+check "끊긴 상태에서도 실패한 새 버전을 되돌림(v5)" '[ "$(cat "$R/opt/sahmhoot/app.jar")" = v5 ]'
+check "되돌린 사실이 실행 로그에 남음" 'grep -q "이전 버전으로 되돌렸습니다" "$RUN_LOG"'
+
+echo "8. 비밀값이 출력에 나오지 않는다"
 check "모든 실행 출력에 비밀값 없음" '! grep -q "$SECRET" "$T/all-out"'
+check "실행 로그에 비밀값 없음" '! grep -q "$SECRET" "$RUN_LOG"'
 
 if [ "$FAILS" -eq 0 ]; then echo "모두 통과"; else echo "실패 $FAILS건"; exit 1; fi

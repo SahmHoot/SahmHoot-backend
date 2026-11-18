@@ -22,8 +22,13 @@ HEALTH_URL="http://127.0.0.1:8080/api/health"
 HEALTH_WAIT_SECONDS=90
 REQUIRED_KEYS="DB_USERNAME DB_PASSWORD JWT_SECRET CORS_ALLOWED_ORIGINS APP_ROOM_JOIN_BASE_URL"
 
-log() { printf '[deploy] %s\n' "$*"; }
-die() { printf '[deploy] 중단: %s\n' "$*" >&2; exit 1; }
+# 실행 로그(RUN_LOG)를 연 뒤에는 모든 출력이 그 파일로 가고, 안내 줄만 화면(3번)에도 보낸다.
+# ssh가 끊겨 화면 쪽이 닫혀도 쓰기 실패를 무시하고 배포를 계속한다.
+# 화면 쓰기는 외부 cat이 한다. bash 내장 printf가 닫힌 화면에 쓰다 실패하면 남은 글자가
+# 버퍼에 남아 다음 $(...) 결과에 섞이기 때문이다(시험 7에서 확인).
+to_terminal() { [ -z "${RUN_LOG:-}" ] || printf '%s\n' "$1" | { cat >&3; } 2>/dev/null || true; }
+log() { printf '[deploy] %s\n' "$*"; to_terminal "[deploy] $*"; }
+die() { printf '[deploy] 중단: %s\n' "$*" >&2; to_terminal "[deploy] 중단: $*"; exit 1; }
 
 usage() {
   echo "사용법: $0 <all|backend|frontend> [브랜치 또는 태그(기본 develop)]" >&2
@@ -149,7 +154,7 @@ release_backend() {
     return
   fi
 
-  log "새 버전이 정상이 되지 않았습니다(교체·시작 실패 또는 ${HEALTH_WAIT_SECONDS}초 안에 UP 아님). 최근 로그:"
+  log "새 버전이 정상이 되지 않았습니다(교체·시작 실패 또는 ${HEALTH_WAIT_SECONDS}초 안에 UP 아님). 서비스 로그는 $RUN_LOG 에 남긴다."
   sudo journalctl -u sahmhoot -n 40 --no-pager || true
   rollback "$backup"
 }
@@ -172,6 +177,8 @@ record() {
 
 # 소스를 바꾸면 이 파일도 바뀌므로 전체를 함수로 감싸 끝까지 읽은 뒤 실행한다.
 main() {
+  # ssh 접속이 끊겨도(HUP, 닫힌 출력의 PIPE) 중간에 죽지 않는다. 자식 명령에도 그대로 이어진다.
+  trap '' HUP PIPE
   TARGET="${1:-}"
   REF="${2:-develop}"
   DEPLOYED=""
@@ -184,6 +191,12 @@ main() {
   # 두 사람이 동시에 배포하지 않게 막는다.
   exec 9>"$(dirname "$BACKEND_DIR")/.deploy.lock"
   flock -n 9 || die "다른 배포가 진행 중입니다."
+
+  # 빌드·명령 출력은 이 파일에만 남는다(서버 로그 일부가 들어갈 수 있어 주인만 읽기).
+  RUN_LOG="$(dirname "$BACKEND_DIR")/deploy-last.log"
+  (umask 077 && : > "$RUN_LOG")
+  exec 3>&1 >>"$RUN_LOG" 2>&1
+  log "실행 로그: $RUN_LOG (접속이 끊겨도 배포는 계속된다. 다시 접속해 tail -f로 확인)"
 
   local backend=false frontend=false
   [ "$TARGET" = frontend ] || backend=true
