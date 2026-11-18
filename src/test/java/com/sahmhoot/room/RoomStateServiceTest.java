@@ -15,6 +15,7 @@ import com.sahmhoot.room.service.RoomStateService;
 import com.sahmhoot.room.service.RoomPresenceService;
 import com.sahmhoot.room.service.RoomUserLookup;
 import com.sahmhoot.room.service.port.RoomQuizStatePort;
+import com.sahmhoot.room.service.port.RoomChatStatePort;
 import com.sahmhoot.room.service.port.RoomReactionStatsPort;
 import java.time.Clock;
 import java.time.Instant;
@@ -39,12 +40,13 @@ class RoomStateServiceTest {
   private final RoomUserLookup users = mock(RoomUserLookup.class);
   private final RoomLockManager locks = new RoomLockManager();
   private final RoomQuizStatePort quizzes = mock(RoomQuizStatePort.class);
+  private final RoomChatStatePort chats = mock(RoomChatStatePort.class);
   private final RoomReactionStatsPort reactions = mock(RoomReactionStatsPort.class);
   private static final Map<String, Integer> REACTIONS = Map.of("👍", 2, "❓", 0, "😀", 1, "👏", 0);
   private final RoomPresenceService presence = mock(RoomPresenceService.class);
   private final PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
   private final RoomStateService service = new RoomStateService(rooms, participants, users, locks,
-      quizzes, reactions, Clock.fixed(NOW, ZoneOffset.UTC), presence, transactions, "https://class.example/");
+      quizzes, chats, reactions, Clock.fixed(NOW, ZoneOffset.UTC), presence, transactions, "https://class.example/");
   private Room room;
 
   @BeforeEach void setup() {
@@ -56,6 +58,7 @@ class RoomStateServiceTest {
     member(1L, 100L, "담당교수");
     member(2L, 200L, "학생닉네임");
     when(quizzes.read(anyLong(), anyLong())).thenReturn(RoomQuizStatePort.Snapshot.waiting());
+    when(chats.read(anyLong(), anyLong())).thenReturn(new RoomChatStatePort.Snapshot(false, List.of(), List.of()));
     when(reactions.recentCounts(eq(42L), any())).thenAnswer(call -> {
       assertThat(locks.isLocked(42L)).isTrue();
       return REACTIONS;
@@ -94,7 +97,7 @@ class RoomStateServiceTest {
       now.set(NOW.plusSeconds(2));
       return 3;
     });
-    var reader = new RoomStateService(rooms, participants, users, locks, quizzes, reactions, clock,
+    var reader = new RoomStateService(rooms, participants, users, locks, quizzes, chats, reactions, clock,
         presence, transactions, "https://class.example");
     var response = reader.state(42L, 2L);
     assertThat(response.onlineCount()).isEqualTo(3);
@@ -102,6 +105,17 @@ class RoomStateServiceTest {
     // 반응 집계도 같은 serverTime을 기준 시각으로 받는다.
     assertThat(reader.state(42L, 1L).reactionStats()).isEqualTo(REACTIONS);
     verify(reactions).recentCounts(42L, NOW.plusSeconds(2));
+  }
+
+  @Test void chatSnapshotUsesAuthenticatedParticipantAndRestoresAllPinnedMessages() {
+    var first = new Message(501L, 100L, "담당교수", true, "공지1", null, null, NOW);
+    var second = new Message(502L, 200L, "학생닉네임", false, "공지2", null, null, NOW);
+    when(chats.read(42L, 200L)).thenReturn(new RoomChatStatePort.Snapshot(true, List.of(second), List.of(first, second)));
+    var response = service.state(42L, 2L);
+    assertThat(response.me().chatBlocked()).isTrue();
+    assertThat(response.recentMessages()).containsExactly(second);
+    assertThat(response.pinnedMessages()).containsExactly(first, second);
+    verify(chats).read(42L, 200L);
   }
 
   @Test void ownershipUsesRoomHostRatherThanAccountRole() {

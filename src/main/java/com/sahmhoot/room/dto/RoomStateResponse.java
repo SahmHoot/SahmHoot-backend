@@ -9,7 +9,7 @@ import java.util.Map;
 /** 05 API 명세 #21. 정답·집계의 노출 범위는 RoomStateService에서 제한한다. */
 public record RoomStateResponse(
     Instant serverTime, RoomDetail room, QuizRun quizRun, Me me, int onlineCount,
-    Quiz quiz, Message pinnedMessage, List<Message> recentMessages,
+    Quiz quiz, List<Message> pinnedMessages, List<Message> recentMessages,
     @JsonInclude(JsonInclude.Include.NON_NULL) Progress progress,
     @JsonInclude(JsonInclude.Include.NON_NULL) Map<String, Integer> reactionStats
 ) {

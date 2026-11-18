@@ -1,18 +1,25 @@
 package com.sahmhoot.auth;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.jayway.jsonpath.JsonPath;
 import com.sahmhoot.auth.verification.EmailVerificationStore;
+import com.sahmhoot.auth.verification.VerificationMailSender;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpHeaders;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,6 +32,13 @@ class AuthFlowTest {
 
   @Autowired private MockMvc mockMvc;
   @Autowired private EmailVerificationStore store;
+  @MockitoBean private VerificationMailSender mailSender;
+
+  @AfterEach void clearVerificationFixtures() {
+    store.remove("flow@test.ac.kr");
+    store.remove("again@test.ac.kr");
+    store.remove("unsupported@test.ac.kr");
+  }
 
   private ResultActions postJson(String url, String body) throws Exception {
     return mockMvc.perform(post(url).contentType(MediaType.APPLICATION_JSON).content(body));
@@ -71,6 +85,19 @@ class AuthFlowTest {
         .perform(get("/api/users/me"))
         .andExpect(status().isUnauthorized())
         .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+  }
+
+  @Test void unsupportedContentTypePreserves415AndDoesNotCreateVerification() throws Exception {
+    mockMvc.perform(post("/api/auth/email-verifications").contentType(MediaType.TEXT_PLAIN)
+            .content("{\"email\":\"unsupported@test.ac.kr\"}"))
+        .andExpect(status().isUnsupportedMediaType());
+    assertThat(store.get("unsupported@test.ac.kr")).isNull();
+  }
+
+  @Test void unsupportedMethodPreserves405AndAllowHeader() throws Exception {
+    mockMvc.perform(get("/api/auth/email-verifications"))
+        .andExpect(status().isMethodNotAllowed())
+        .andExpect(header().string(HttpHeaders.ALLOW, containsString("POST")));
   }
 
   @Test

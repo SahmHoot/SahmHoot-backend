@@ -15,10 +15,11 @@ public class RoomAccessChecker {
 
   private final JdbcTemplate jdbcTemplate;
 
+  /** 보존된 과거 참여 기록과 현재 활성 참여를 구분한다. */
   public boolean isParticipant(long roomId, long userId) {
     Integer n =
         jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM room_participants WHERE room_id = ? AND user_id = ?",
+            "SELECT COUNT(*) FROM room_participants WHERE room_id = ? AND user_id = ? AND left_at IS NULL",
             Integer.class,
             roomId,
             userId);

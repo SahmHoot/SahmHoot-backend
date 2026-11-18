@@ -19,14 +19,18 @@ spring:
     locations: classpath:db/migration
 
   mail:
-    # 비워 두면 메일 대신 서버 로그에 인증 코드를 찍는다(로컬 개발용)
+    # 로컬은 SSH 포워딩, 운영은 같은 VM의 Postfix에 연결한다.
     host: ${MAIL_HOST:}
-    port: ${MAIL_PORT:587}
+    port: ${MAIL_PORT:25}
     username: ${MAIL_USERNAME:}
     password: ${MAIL_PASSWORD:}
     properties:
-      mail.smtp.auth: true
-      mail.smtp.starttls.enable: true
+      mail.smtp.auth: ${MAIL_SMTP_AUTH:false}
+      mail.smtp.starttls.enable: ${MAIL_SMTP_STARTTLS_ENABLE:false}
+      mail.smtp.starttls.required: ${MAIL_SMTP_STARTTLS_REQUIRED:false}
+      mail.smtp.connectiontimeout: ${MAIL_CONNECTION_TIMEOUT:5000}
+      mail.smtp.timeout: ${MAIL_READ_TIMEOUT:5000}
+      mail.smtp.writetimeout: ${MAIL_WRITE_TIMEOUT:5000}
 
 app:
   jwt:
@@ -34,7 +38,7 @@ app:
     secret: ${JWT_SECRET:}
     expiration-days: 14
   mail:
-    from: ${MAIL_FROM:no-reply@sahmhoot.local}
+    from: ${MAIL_FROM:}
   auth:
     # 쉼표로 구분(예: syuin.ac.kr). 비우면 도메인 제한 없음
     allowed-email-domains: ${ALLOWED_EMAIL_DOMAINS:}

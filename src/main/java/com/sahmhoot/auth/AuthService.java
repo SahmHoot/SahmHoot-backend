@@ -14,6 +14,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 @Service
@@ -28,7 +30,7 @@ public class AuthService {
   @Transactional
   public AuthResponse signup(SignupRequest req) {
     String email = EmailVerificationService.normalize(req.email());
-    verificationService.consumeForSignup(email, req.code());
+    var verification = verificationService.verifyForSignup(email, req.code());
     if (userRepository.existsByEmail(email)) {
       throw new ApiException(ErrorCode.EMAIL_ALREADY_EXISTS);
     }
@@ -45,7 +47,11 @@ public class AuthService {
                 req.name().trim(),
                 studentNumber,
                 req.role()));
-    verificationService.remove(email);
+    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+      @Override public void afterCommit() {
+        verificationService.remove(email, verification);
+      }
+    });
     return toResponse(user);
   }
 

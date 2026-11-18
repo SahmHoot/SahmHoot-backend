@@ -136,7 +136,7 @@ class LocalSeedIntegrationTest {
         "jdbc:mysql://localhost:3306/sahmhoot_test?characterEncoding=UTF-8&connectionTimeZone=UTC");
     var args = new ArrayList<>(List.of(
         "--spring.profiles.active=" + profiles, "--spring.datasource.url=" + url,
-        "--server.port=0", "--spring.main.banner-mode=off",
+        "--server.port=0", "--spring.main.banner-mode=off", "--app.mail.from=no-reply@test.invalid",
         "--app.jwt.secret=test-only-seed52-jwt-key-0123456789abcdef"));
     args.addAll(List.of(properties));
     return new SpringApplicationBuilder(SahmhootApplication.class).run(args.toArray(String[]::new));
