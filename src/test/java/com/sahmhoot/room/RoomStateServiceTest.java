@@ -16,10 +16,12 @@ import com.sahmhoot.room.service.RoomPresenceService;
 import com.sahmhoot.room.service.RoomUserLookup;
 import com.sahmhoot.room.service.port.RoomQuizStatePort;
 import com.sahmhoot.room.service.port.RoomChatStatePort;
+import com.sahmhoot.room.service.port.RoomReactionStatsPort;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,10 +41,12 @@ class RoomStateServiceTest {
   private final RoomLockManager locks = new RoomLockManager();
   private final RoomQuizStatePort quizzes = mock(RoomQuizStatePort.class);
   private final RoomChatStatePort chats = mock(RoomChatStatePort.class);
+  private final RoomReactionStatsPort reactions = mock(RoomReactionStatsPort.class);
+  private static final Map<String, Integer> REACTIONS = Map.of("👍", 2, "❓", 0, "😀", 1, "👏", 0);
   private final RoomPresenceService presence = mock(RoomPresenceService.class);
   private final PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
   private final RoomStateService service = new RoomStateService(rooms, participants, users, locks,
-      quizzes, chats, Clock.fixed(NOW, ZoneOffset.UTC), presence, transactions, "https://class.example/");
+      quizzes, chats, reactions, Clock.fixed(NOW, ZoneOffset.UTC), presence, transactions, "https://class.example/");
   private Room room;
 
   @BeforeEach void setup() {
@@ -55,6 +59,10 @@ class RoomStateServiceTest {
     member(2L, 200L, "학생닉네임");
     when(quizzes.read(anyLong(), anyLong())).thenReturn(RoomQuizStatePort.Snapshot.waiting());
     when(chats.read(anyLong(), anyLong())).thenReturn(new RoomChatStatePort.Snapshot(false, List.of(), List.of()));
+    when(reactions.recentCounts(eq(42L), any())).thenAnswer(call -> {
+      assertThat(locks.isLocked(42L)).isTrue();
+      return REACTIONS;
+    });
     when(transactions.getTransaction(any())).thenAnswer(call -> {
       assertThat(locks.isLocked(42L)).isTrue();
       var definition = call.getArgument(0, TransactionDefinition.class);
@@ -73,6 +81,7 @@ class RoomStateServiceTest {
     assertThat(response.quiz()).isNull();
     assertThat(response.progress()).isNull();
     assertThat(response.reactionStats()).isNull();
+    verifyNoInteractions(reactions);
     assertThat(response.onlineCount()).isZero();
     assertThat(response.recentMessages()).isEmpty();
     verify(quizzes).read(42L, 200L);
@@ -88,11 +97,14 @@ class RoomStateServiceTest {
       now.set(NOW.plusSeconds(2));
       return 3;
     });
-    var reader = new RoomStateService(rooms, participants, users, locks, quizzes, chats, clock,
+    var reader = new RoomStateService(rooms, participants, users, locks, quizzes, chats, reactions, clock,
         presence, transactions, "https://class.example");
     var response = reader.state(42L, 2L);
     assertThat(response.onlineCount()).isEqualTo(3);
     assertThat(response.serverTime()).isEqualTo(NOW.plusSeconds(2));
+    // 반응 집계도 같은 serverTime을 기준 시각으로 받는다.
+    assertThat(reader.state(42L, 1L).reactionStats()).isEqualTo(REACTIONS);
+    verify(reactions).recentCounts(42L, NOW.plusSeconds(2));
   }
 
   @Test void chatSnapshotUsesAuthenticatedParticipantAndRestoresAllPinnedMessages() {
@@ -112,7 +124,8 @@ class RoomStateServiceTest {
     when(users.findById(1L)).thenReturn(Optional.of(new RoomUserLookup.RoomUser(1L, "STUDENT", "담당교수")));
     var response = service.state(42L, 1L);
     assertThat(response.me().isOwner()).isTrue();
-    assertThat(response.reactionStats()).isEmpty();
+    assertThat(response.reactionStats()).isEqualTo(REACTIONS);
+    verify(reactions).recentCounts(42L, NOW);
   }
 
   @Test void deletedUserIsUnauthorizedBeforeReadingRoomOrQuiz() {
@@ -149,7 +162,7 @@ class RoomStateServiceTest {
     assertThat(student.reactionStats()).isNull();
     assertThat(owner.quiz().myAnswers()).isNull();
     assertThat(owner.progress()).isEqualTo(phase == Phase.QUESTION ? snapshot.progress() : null);
-    assertThat(owner.reactionStats()).isEmpty();
+    assertThat(owner.reactionStats()).isEqualTo(REACTIONS);
     if (phase == Phase.RESULT) {
       assertThat(student.quiz().currentQuestion()).isNull();
       assertThat(student.quiz().result()).isEqualTo(snapshot.quiz().result());
