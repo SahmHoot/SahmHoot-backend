@@ -3,9 +3,11 @@
 #
 #   deploy/deploy.sh <all|backend|frontend> [브랜치 또는 태그]      기본: develop
 #   내 PC에서:  ssh <계정>@sahmhoot.com 'bash ~/sahmhoot/backend/deploy/deploy.sh all develop'
+#   접속이 끊겨도 끝까지 실행된다. 이어서 볼 때: tail -f ~/sahmhoot/deploy-last.log
 #
-# 순서: 필수 환경변수 확인 → 소스 맞춤 → 빌드(백엔드·프론트) → DB 백업 → jar 교체·재시작
-#       → 상태 확인(실패하면 이전 jar로 되돌림) → 프론트 복사 → 배포 기록.
+# 순서: sudo·배포 폴더·필수 환경변수 확인 → 소스 맞춤 → 빌드(백엔드·프론트) → DB 백업
+#       → 지금 jar를 .bak으로 보관, 새 jar를 .new로 준비 → 멈춤·교체·시작
+#       → 상태 확인(교체·시작·확인 중 실패하면 이전 jar로 되돌림) → 프론트 복사 → 배포 기록.
 # 비밀값은 /etc/sahmhoot.env에만 있다. 이 스크립트는 키가 있는지만 확인하고 값은 읽거나 출력하지 않는다.
 # 재시작하는 동안 접속이 끊기므로 수업 중에는 실행하지 않는다.
 set -euo pipefail
