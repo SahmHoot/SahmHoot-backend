@@ -8,6 +8,7 @@ public enum ChatErrorCode {
   NOT_PARTICIPANT("해당 방의 참여자가 아닙니다."),
   CHAT_BLOCKED("채팅이 제한된 참여자입니다."),
   FORBIDDEN("권한이 없습니다."),
+  CANNOT_BLOCK_OWNER("수업방 소유자는 채팅을 제한할 수 없습니다."),
   VALIDATION_FAILED("입력값 형식 오류입니다."),
   INTERNAL_ERROR("서버 내부 오류가 발생했습니다.");
 
