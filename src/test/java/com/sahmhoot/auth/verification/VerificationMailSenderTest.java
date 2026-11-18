@@ -5,13 +5,17 @@ import static org.mockito.Mockito.*;
 
 import com.sahmhoot.auth.exception.ApiException;
 import com.sahmhoot.auth.exception.ErrorCode;
+import jakarta.mail.Session;
+import jakarta.mail.internet.InternetAddress;
+import jakarta.mail.internet.MimeMessage;
+import java.util.Properties;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.mail.MailSendException;
-import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 
 @ExtendWith(OutputCaptureExtension.class)
@@ -20,16 +24,26 @@ class VerificationMailSenderTest {
   @SuppressWarnings("unchecked")
   private final ObjectProvider<JavaMailSender> provider = mock(ObjectProvider.class);
 
-  @Test void sendsCodeOnlyThroughConfiguredTransport() {
+  @BeforeEach void setup() {
+    when(transport.createMimeMessage()).thenAnswer(call -> new MimeMessage(Session.getInstance(new Properties())));
+  }
+
+  @Test void sendsCodeOnlyThroughConfiguredTransport() throws Exception {
     when(provider.getIfAvailable()).thenReturn(transport);
     var sender = new VerificationMailSender(provider, "127.0.0.1", "sender@test.invalid");
     sender.send("recipient@test.invalid", "123456");
-    var captured = org.mockito.ArgumentCaptor.forClass(SimpleMailMessage.class);
+    var captured = org.mockito.ArgumentCaptor.forClass(MimeMessage.class);
     verify(transport).send(captured.capture());
-    assertThat(captured.getValue().getFrom()).isEqualTo("sender@test.invalid");
-    assertThat(captured.getValue().getTo()).containsExactly("recipient@test.invalid");
-    assertThat(captured.getValue().getSubject()).isEqualTo("[삼훗] 이메일 인증 코드");
-    assertThat(captured.getValue().getText()).contains("123456", "10분");
+    var message = captured.getValue();
+    message.saveChanges();
+    assertThat(((InternetAddress) message.getFrom()[0]).getAddress()).isEqualTo("sender@test.invalid");
+    assertThat(((InternetAddress) message.getFrom()[0]).getPersonal()).isEqualTo("SahmHoot");
+    assertThat(message.getAllRecipients()[0].toString()).isEqualTo("recipient@test.invalid");
+    assertThat(message.getSubject()).isEqualTo("[SahmHoot!] 이메일 인증번호 발송");
+    assertThat(MimeContent.body(message, "text/plain")).contains("123456", "10분");
+    assertThat(MimeContent.body(message, "text/html"))
+        .contains("123456", "SahmHoot!", "#2538d2", "#6577f0", "All rights reserved.")
+        .doesNotContain("{{verificationCode}}", "이메일을 인증해 주세요", "삼훗 가입을 위해");
   }
 
   @Test void missingSettingsFailWithoutPrintingCode(CapturedOutput output) {
@@ -45,9 +59,20 @@ class VerificationMailSenderTest {
   @Test void transportFailureDoesNotExposeSmtpExceptionContents(CapturedOutput output) {
     when(provider.getIfAvailable()).thenReturn(transport);
     doThrow(new MailSendException("SMTP response contains code=123456 and credential=private-value"))
-        .when(transport).send(any(SimpleMailMessage.class));
+        .when(transport).send(any(MimeMessage.class));
     assertFailure(new VerificationMailSender(provider, "127.0.0.1", "sender@test.invalid"));
     assertThat(output.getAll()).doesNotContain("123456", "private-value", "recipient@test.invalid");
+  }
+
+  @Test void dynamicContentIsEscapedInHtml() throws Exception {
+    when(provider.getIfAvailable()).thenReturn(transport);
+    new VerificationMailSender(provider, "127.0.0.1", "sender@test.invalid")
+        .send("recipient@test.invalid", "<b>code</b>");
+    var captured = org.mockito.ArgumentCaptor.forClass(MimeMessage.class);
+    verify(transport).send(captured.capture());
+    captured.getValue().saveChanges();
+    assertThat(MimeContent.body(captured.getValue(), "text/html"))
+        .contains("&lt;b&gt;code&lt;/b&gt;").doesNotContain("<b>code</b>");
   }
 
   private void assertFailure(VerificationMailSender sender) {
