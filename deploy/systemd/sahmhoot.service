@@ -1,19 +1,19 @@
-# 서버 /etc/systemd/system/sahmhoot.service 초안.
-# DEPLOY.md 설명("sahmhoot 계정으로 java -jar /opt/sahmhoot/app.jar 실행")으로 만들었고 실제 서버 파일과 아직 대조하지 않았다.
-# 서버에서 `systemctl cat sahmhoot`으로 확인해 다르면 서버 파일 기준으로 고친다. 비밀값은 Environment= 대신 EnvironmentFile로만 받는다.
+# 서버 /etc/systemd/system/sahmhoot.service 사본(2026-11-18 `systemctl cat sahmhoot`로 확인).
+# 서버 파일을 바꾸면 이 파일도 같이 고친다. 비밀값은 Environment= 대신 EnvironmentFile로만 받는다.
 [Unit]
-Description=SahmHoot backend
-After=network-online.target mysql.service
-Wants=network-online.target
+Description=Sahmhoot Spring Boot
+After=network.target mysql.service
+Requires=mysql.service
 
 [Service]
+Type=simple
 User=sahmhoot
+WorkingDirectory=/opt/sahmhoot
 EnvironmentFile=/etc/sahmhoot.env
 ExecStart=/usr/bin/java -jar /opt/sahmhoot/app.jar
-# SIGTERM으로 정상 종료하면 자바는 143으로 끝난다.
-SuccessExitStatus=143
 Restart=on-failure
 RestartSec=5
+SuccessExitStatus=143
 
 [Install]
 WantedBy=multi-user.target

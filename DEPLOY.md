@@ -52,9 +52,10 @@ flowchart LR
 | 경로 | 역할 |
 |---|---|
 | `~/sahmhoot/backend`, `~/sahmhoot/frontend` | Git 소스·빌드 작업 폴더 (관리자 계정 홈). 배포 스크립트가 배포한 커밋에 고정한다 |
+| `~/sahmhoot/deploy-last.log` | 마지막 배포의 실행 로그(빌드 출력, 실패 시 서비스 로그). 주인만 읽기(600) |
 | `/opt/sahmhoot/app.jar` | 실행 중인 백엔드 JAR. 직전 버전은 `app.jar.bak` |
 | `/etc/sahmhoot.env` | 백엔드 환경변수. root만 읽게 둔다(`root:root`, 600). 키 목록은 레포 `deploy/sahmhoot.env.example` |
-| `/etc/systemd/system/sahmhoot.service` | 백엔드 서비스 정의. `sahmhoot` 계정으로 `java -jar /opt/sahmhoot/app.jar` 실행. 레포 사본 `deploy/systemd/sahmhoot.service`(초안, 서버 파일과 대조 필요) |
+| `/etc/systemd/system/sahmhoot.service` | 백엔드 서비스 정의. `sahmhoot` 계정으로 `java -jar /opt/sahmhoot/app.jar` 실행. MySQL이 먼저 떠야 시작한다(`Requires=mysql.service`). 레포 사본 `deploy/systemd/sahmhoot.service`(2026-11-18 서버 파일과 같음) |
 | `/var/www/sahmhoot/` | Nginx가 제공하는 프론트 빌드 파일 |
 | `/etc/nginx/sites-available/sahmhoot` | 사이트 설정. `sites-enabled/sahmhoot`가 이 파일을 가리킨다. 레포 사본 `deploy/nginx/sahmhoot.conf` |
 | `/etc/letsencrypt/` | 인증서. 개인키를 복사하거나 공유하지 않는다 |
@@ -81,7 +82,7 @@ flowchart LR
 
 값은 서버에만 둔다. 키 이름만 확인할 때는 `sudo grep -oE '^[A-Z_]+=' /etc/sahmhoot.env`를 쓴다. 키 목록과 설명은 레포 [`deploy/sahmhoot.env.example`](deploy/sahmhoot.env.example)에 있다.
 
-필수 키(`DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`, `CORS_ALLOWED_ORIGINS`, `APP_ROOM_JOIN_BASE_URL`, `SPRING_PROFILES_ACTIVE=prod`)가 하나라도 없으면 배포 스크립트가 멈춘다. `application-prod.yml`은 DB 계정·`CORS_ALLOWED_ORIGINS`·`APP_ROOM_JOIN_BASE_URL`의 로컬 기본값을 쓰지 않으므로, 스크립트 없이 재시작해도 이 넷이 없으면 기동하지 않는다.
+필수 키(`DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`, `CORS_ALLOWED_ORIGINS`, `APP_ROOM_JOIN_BASE_URL`, `SPRING_PROFILES_ACTIVE=prod`)가 하나라도 없으면 배포 스크립트가 멈춘다. systemd가 실제로 쓰는 값으로 확인하므로 `""`·`''`·공백만인 값과, 같은 키를 두 번 적은 경우(뒤의 값이 쓰인다)도 멈춘다. 키는 한 줄에 하나만 둔다. `application-prod.yml`은 DB 계정·`CORS_ALLOWED_ORIGINS`·`APP_ROOM_JOIN_BASE_URL`의 로컬 기본값을 쓰지 않으므로, 스크립트 없이 재시작해도 이 넷이 없으면 기동하지 않는다.
 
 | 키 | 상태 | 비고 |
 |---|---|---|
@@ -89,7 +90,7 @@ flowchart LR
 | `JWT_SECRET` | 설정됨 | 필수 |
 | `CORS_ALLOWED_ORIGINS` | 설정됨 | `https://sahmhoot.com,https://www.sahmhoot.com`. 필수. 없으면 브라우저 로그인·WebSocket이 403 |
 | `SPRING_PROFILES_ACTIVE` | 설정됨 | `prod`여야 한다. 없으면 `local`로 떠서 Swagger가 켜진다 |
-| `APP_ROOM_JOIN_BASE_URL` | **미설정** | 필수. `https://sahmhoot.com`으로 설정해야 다음 배포가 진행된다. 없으면 참여 링크·QR이 localhost를 가리킨다 |
+| `APP_ROOM_JOIN_BASE_URL` | 설정됨 (2026-11-18 확인) | 필수. `https://sahmhoot.com`. 없으면 참여 링크·QR이 localhost를 가리킨다 |
 | `MAIL_HOST`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM` | 미설정 | #21에서 설정. 비어 있으면 인증 코드가 메일 대신 서버 로그에 찍힌다 |
 | `ALLOWED_EMAIL_DOMAINS` | 미설정 | 가입 허용 도메인. 운영 전에 정한다 |
 
@@ -105,23 +106,28 @@ ssh <계정>@sahmhoot.com 'bash ~/sahmhoot/backend/deploy/deploy.sh all develop'
 
 # 서버에 접속해 있다면
 bash ~/sahmhoot/backend/deploy/deploy.sh all develop
+
+# 접속이 끊겼다면 다시 접속해 이어서 본다
+tail -f ~/sahmhoot/deploy-last.log
 ```
 
+- 접속이 끊겨도 스크립트는 끝까지 실행된다. 화면에는 안내 줄만 나오고, 빌드 출력과 실패 시 서비스 로그는 `~/sahmhoot/deploy-last.log`에 남는다.
+
 - 대상: `all`(백엔드 → 프론트 순서), `backend`, `frontend`. 브랜치나 태그를 생략하면 `develop`이다. 최종 배포(#33)는 `deploy.sh all v1.0.0`처럼 태그로 한다.
-- 스크립트가 하는 일: 필수 환경변수 확인 → 소스를 원격 브랜치·태그의 커밋에 맞춤 → 백엔드·프론트 빌드 → DB 백업(`/var/backups/sahmhoot`) → JAR 교체·재시작 → `/api/health`가 90초 안에 UP인지 확인 → 프론트 복사 → `/var/log/sahmhoot-deploy.log`에 기록. 빌드가 모두 끝난 뒤에만 서비스를 바꾸므로, 빌드가 실패하면 운영 중인 서버는 그대로다.
-- 새 버전이 UP이 되지 않으면 `app.jar.bak`(직전 버전)으로 되돌리고 실패로 끝난다. DB는 되돌리지 않는다. Flyway 마이그레이션은 기동할 때 적용되므로, 필요하면 백업 파일로 복원한다(아래 "백업").
-- 멈추는 경우: 필수 키가 없을 때, 서버 소스 폴더에 커밋하지 않은 변경이 있을 때, 브랜치·태그가 없을 때, 다른 배포가 진행 중일 때.
+- 스크립트가 하는 일: 비밀번호 없는 sudo·프론트 배포 폴더·필수 환경변수 확인 → 소스를 원격 브랜치·태그의 커밋에 맞춤 → 백엔드·프론트 빌드 → DB 백업(`/var/backups/sahmhoot`) → 지금 JAR를 `app.jar.bak`으로 보관 → 새 JAR를 `app.jar.new`로 준비한 뒤 멈춤·교체·시작 → `/api/health`가 90초 안에 UP인지 확인 → 프론트 복사 → `/var/log/sahmhoot-deploy.log`에 기록. 빌드가 모두 끝난 뒤에만 서비스를 바꾸므로, 빌드가 실패하면 운영 중인 서버는 그대로다.
+- 교체·시작이 실패하거나 새 버전이 UP이 되지 않으면 `app.jar.bak`(직전 버전)으로 되돌리고 실패로 끝난다. 새 JAR 준비(복사)나 DB 백업이 실패하면 서비스를 멈추기 전에 끝난다. DB는 되돌리지 않는다. Flyway 마이그레이션은 기동할 때 적용되므로, 필요하면 백업 파일로 복원한다(아래 "백업").
+- 멈추는 경우: sudo가 비밀번호를 요구할 때, 필수 키가 없거나 비었거나 중복일 때, 서버 소스 폴더에 커밋하지 않은 변경이 있을 때, 브랜치·태그가 없을 때, 다른 배포가 진행 중일 때.
 - 소스 폴더는 배포한 커밋에 고정(detached HEAD)된다. 서버에서 `git pull`이나 파일 수정을 하지 않는다. 고칠 것은 PR로 올린다.
 - 프론트는 이전 빌드 파일을 지우지 않는다. 이미 열려 있는 화면이 예전 파일을 계속 불러올 수 있게 하기 위해서다.
 - 스크립트를 고쳤다면 PR 전에 `bash deploy/test-deploy.sh`로 가짜 서버 시험을 돌린다. 이 스크립트는 서버에서 sudo로 실행되므로 `deploy/` 변경은 리뷰를 받고 머지한다.
 
 ### 처음 한 번 (스크립트 도입 전 서버)
 
-스크립트가 develop에 머지된 뒤 한 번만 한다.
+스크립트가 develop에 머지된 뒤 한 번만 한다. 2026-11-18 기준 서버는 11/12에 수동으로 올린 JAR로 돌고 있고 DB에는 V1만 있다. 첫 실행 때 채팅 테이블(V2)이 처음 적용된다.
 
-1. `/etc/sahmhoot.env`에 `APP_ROOM_JOIN_BASE_URL=https://sahmhoot.com`을 넣는다. 다른 필수 키는 [`deploy/sahmhoot.env.example`](deploy/sahmhoot.env.example)과 비교한다.
-2. `systemctl cat sahmhoot` 결과를 [`deploy/systemd/sahmhoot.service`](deploy/systemd/sahmhoot.service)와 비교하고, 다르면 레포 사본을 서버 기준으로 고친다. `Environment=`에 비밀값이 직접 있으면 env 파일로 옮긴다.
-3. 두 소스 폴더에 커밋하지 않은 변경이 없는지 확인한다(`git -C ~/sahmhoot/backend status`, 프론트도 같이).
+1. GCP 콘솔에서 디스크 스냅샷을 만든다. DB 백업과 `app.jar.bak`은 스크립트가 교체 전에 직접 만든다.
+2. 소스 폴더(`~/sahmhoot/backend`, `~/sahmhoot/frontend`)의 주인인 관리자 계정으로 접속한다. 스크립트는 자기 위치 기준으로 옆의 `frontend`를 찾는다.
+3. 두 소스 폴더에 커밋하지 않은 변경이 없는지 확인한다(`git -C ~/sahmhoot/backend status`, 프론트도 같이). `git status --ignored`로 `application-local.yml` 같은 파일이 남아 있지 않은지도 본다.
 4. 백엔드 소스를 스크립트가 있는 커밋으로 한 번 맞춘 뒤 실행한다.
 
    ```bash
@@ -151,10 +157,14 @@ chmod 600 ~/sahmhoot-backup-*.sql
 
 VM 한 대에 DB가 같이 있으므로, 큰 작업 전에는 GCP 콘솔에서 디스크 스냅샷도 만든다.
 
-배포 스크립트는 백엔드를 교체하기 전에 `/var/backups/sahmhoot/predeploy-날짜-시각.sql.gz`를 만들고 14일 지난 것은 지운다. 정기 자동 백업은 아직 없다(#98). 복원은 아래처럼 한다. 현재 DB를 덮어쓰므로 먼저 지금 상태를 한 번 더 덤프한다. 백업에 없는 테이블(새 마이그레이션이 만든 테이블)은 지워지지 않으므로, 그 마이그레이션을 다시 적용하려면 해당 테이블을 먼저 지운다.
+배포 스크립트는 백엔드를 교체하기 전에 `/var/backups/sahmhoot/predeploy-날짜-시각-번호.sql.gz`를 만들고 14일 지난 것은 지운다. 정기 자동 백업은 아직 없다(#98). 복원은 아래 순서로 한다. 현재 DB를 덮어쓰므로 먼저 지금 상태를 한 번 더 덤프한다. 복원하는 동안 앱이 DB에 쓰거나 마이그레이션을 다시 돌리지 않게 서비스를 먼저 멈추고, 백업 시점의 JAR(보통 `app.jar.bak`)로 다시 시작한다. 백업에 없는 테이블(새 마이그레이션이 만든 테이블)은 지워지지 않으므로, 그 마이그레이션을 다시 적용하려면 해당 테이블을 먼저 지운다.
 
 ```bash
-gunzip -c /var/backups/sahmhoot/predeploy-날짜-시각.sql.gz | sudo mysql
+sudo systemctl stop sahmhoot
+gunzip -c /var/backups/sahmhoot/predeploy-날짜-시각-번호.sql.gz | sudo mysql
+sudo cp -p /opt/sahmhoot/app.jar.bak /opt/sahmhoot/app.jar   # 백업 시점 버전으로
+sudo systemctl start sahmhoot
+curl -s https://sahmhoot.com/api/health
 ```
 
 ## 레포·이슈·PR에 올리지 않는 것
