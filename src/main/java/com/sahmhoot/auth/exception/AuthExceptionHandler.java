@@ -44,7 +44,10 @@ public class AuthExceptionHandler {
   }
 
   @ExceptionHandler(Exception.class)
-  public ResponseEntity<ErrorResponse> handleUnknown(Exception e) {
+  public ResponseEntity<ErrorResponse> handleUnknown(Exception e) throws Exception {
+    if (e instanceof org.springframework.web.ErrorResponse) {
+      throw e;
+    }
     log.error("처리하지 못한 예외", e);
     ErrorCode code = ErrorCode.INTERNAL_ERROR;
     return ResponseEntity.status(code.status()).body(ErrorResponse.of(code, code.defaultMessage()));

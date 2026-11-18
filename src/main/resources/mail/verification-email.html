@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>[SahmHoot!] 이메일 인증번호 발송</title>
+  <style>
+    :root { --auth-brand: #2538d2; --auth-brand-soft: #6577f0; }
+    html, body { margin: 0; padding: 0; width: 100%; }
+    body, table, td, p { font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', Arial, sans-serif; }
+    table { border-spacing: 0; }
+    @media screen and (max-width: 540px) {
+      .page-padding { padding: 24px 16px !important; }
+      .card-padding { padding: 34px 24px 30px !important; }
+      .verification-code { font-size: 38px !important; letter-spacing: 8px !important; padding-left: 8px !important; }
+    }
+  </style>
+</head>
+<body style="margin:0;padding:0;background-color:transparent;color:#1f253d;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
+    아래 인증번호를 입력해 주세요. 인증번호는 10분 동안 유효합니다.
+  </div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;background-color:transparent;">
+    <tr>
+      <td class="page-padding" align="center" style="padding:42px 20px 34px;">
+        <!--[if mso]><table role="presentation" width="520" align="center"><tr><td><![endif]-->
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;max-width:520px;">
+          <tr>
+            <td style="height:5px;background-color:#6577f0;font-size:0;line-height:0;">&nbsp;</td>
+          </tr>
+          <tr>
+            <td class="card-padding" align="center" style="padding:40px 40px 34px;background-color:#ffffff;border:1px solid #e2e6f1;border-top:0;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center" style="padding:0;">
+                    <span style="display:block;font-size:30px;font-weight:800;line-height:36px;letter-spacing:-1.2px;color:#2538d2;">SahmHoot!</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center" style="padding:0 0 30px;font-size:13px;line-height:20px;letter-spacing:-.2px;color:#6577f0;">수업 중 실시간 참여형 플랫폼</td>
+                </tr>
+                <tr>
+                  <td align="center">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border:1px solid #e0e4fc;">
+                      <tr>
+                        <td align="center" style="padding:19px 12px 7px;font-size:12px;font-weight:600;line-height:18px;letter-spacing:.4px;color:#59688b;">인증번호</td>
+                      </tr>
+                      <tr>
+                        <td align="center" style="padding:0 10px 20px;">
+                          <span class="verification-code" style="display:inline-block;padding-left:10px;font-family:Consolas,'Courier New',monospace;font-size:46px;font-weight:700;line-height:58px;letter-spacing:10px;color:#000000;">{{verificationCode}}</span>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center" style="padding:20px 0;font-size:12px;line-height:20px;color:#626d85;">인증번호는 <strong style="font-weight:600;color:#2538d2;">10분 동안</strong> 유효합니다.</td>
+                </tr>
+                <tr>
+                  <td style="height:1px;background-color:#e9edf5;font-size:0;line-height:0;">&nbsp;</td>
+                </tr>
+                <tr>
+                  <td align="center" style="padding:23px 0 0;font-size:12px;line-height:21px;letter-spacing:-.15px;color:#626d85;">본인이 요청하지 않았다면<br>이 메일을 무시해 주세요.</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:22px 12px 0;font-size:11px;line-height:20px;color:#626d85;">본 메일은 발신 전용입니다.<br>© 2026 SahmHoot. All rights reserved.</td>
+          </tr>
+        </table>
+        <!--[if mso]></td></tr></table><![endif]-->
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

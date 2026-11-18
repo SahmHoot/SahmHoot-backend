@@ -10,13 +10,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
-import lombok.extern.slf4j.Slf4j;
+import java.util.Locale;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-/** 05-1·05-2 인증 코드 발송·확인, 05-3 가입 시 재확인. */
-@Slf4j
+/** 인증 상태 변경만 직렬화한다. SMTP 발송은 잠금 밖에서 수행한다. */
 @Service
 public class EmailVerificationService {
 
@@ -42,7 +41,8 @@ public class EmailVerificationService {
     this.mailSender = mailSender;
     this.userRepository = userRepository;
     this.allowedDomains =
-        Arrays.stream(allowedDomains.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
+        Arrays.stream(allowedDomains.split(",")).map(String::trim)
+            .map(domain -> domain.toLowerCase(Locale.ROOT)).filter(s -> !s.isEmpty()).toList();
   }
 
   void setClock(Clock clock) {
@@ -58,60 +58,59 @@ public class EmailVerificationService {
     if (userRepository.existsByEmail(email)) {
       throw new ApiException(ErrorCode.EMAIL_ALREADY_EXISTS);
     }
-    Instant now = clock.instant();
-    String code = String.format("%06d", random.nextInt(1_000_000));
+    String code = String.format(Locale.ROOT, "%06d", random.nextInt(1_000_000));
+    Entry current;
     synchronized (this) {
+      Instant now = clock.instant();
       Entry prev = store.get(email);
       if (prev != null && prev.sentAt.plus(RESEND_INTERVAL).isAfter(now)) {
         throw new ApiException(ErrorCode.VERIFICATION_TOO_FREQUENT);
       }
       // 새로 보내면 이전 항목을 지워 최신 하나만 남긴다.
-      store.put(email, new Entry(code, now, now.plus(CODE_TTL)));
+      current = new Entry(code, now, now.plus(CODE_TTL));
+      store.put(email, current);
     }
     try {
       mailSender.send(email, code);
     } catch (ApiException e) {
-      store.remove(email);
+      remove(email, current);
       throw e;
     }
   }
 
-  public void confirm(String rawEmail, String code) {
+  public synchronized void confirm(String rawEmail, String code) {
     String email = normalize(rawEmail);
     Entry entry = store.get(email);
     if (entry == null) {
       throw new ApiException(ErrorCode.VERIFICATION_NOT_FOUND);
     }
-    synchronized (entry) {
-      Instant now = clock.instant();
-      if (entry.verifiedAt == null && now.isAfter(entry.expiresAt)) {
-        throw new ApiException(ErrorCode.VERIFICATION_CODE_EXPIRED);
-      }
-      checkCode(email, entry, code);
-      if (entry.verifiedAt == null) {
-        entry.verifiedAt = now;
-      }
+    Instant now = clock.instant();
+    if (entry.verifiedAt == null && now.isAfter(entry.expiresAt)) {
+      throw new ApiException(ErrorCode.VERIFICATION_CODE_EXPIRED);
+    }
+    checkCode(email, entry, code);
+    if (entry.verifiedAt == null) {
+      entry.verifiedAt = now;
     }
   }
 
-  /** 가입 직전 재확인. 통과하면 항목을 지워 재사용을 막는다. */
-  public void consumeForSignup(String rawEmail, String code) {
+  /** 가입 직전 재확인. 검증한 항목만 가입 트랜잭션 커밋 후 제거한다. */
+  public synchronized Entry verifyForSignup(String rawEmail, String code) {
     String email = normalize(rawEmail);
     Entry entry = store.get(email);
     if (entry == null) {
       throw new ApiException(ErrorCode.EMAIL_NOT_VERIFIED);
     }
-    synchronized (entry) {
-      if (entry.verifiedAt == null
-          || clock.instant().isAfter(entry.verifiedAt.plus(SIGNUP_WINDOW))) {
-        throw new ApiException(ErrorCode.EMAIL_NOT_VERIFIED);
-      }
-      checkCode(email, entry, code);
+    if (entry.verifiedAt == null
+        || clock.instant().isAfter(entry.verifiedAt.plus(SIGNUP_WINDOW))) {
+      throw new ApiException(ErrorCode.EMAIL_NOT_VERIFIED);
     }
+    checkCode(email, entry, code);
+    return entry;
   }
 
-  public void remove(String rawEmail) {
-    store.remove(normalize(rawEmail));
+  public synchronized void remove(String rawEmail, Entry expected) {
+    store.remove(normalize(rawEmail), expected);
   }
 
   private void checkCode(String email, Entry entry, String code) {
@@ -121,7 +120,7 @@ public class EmailVerificationService {
     entry.failCount++;
     int left = MAX_FAILURES - entry.failCount;
     if (left <= 0) {
-      store.remove(email);
+      store.remove(email, entry);
       throw new ApiException(
           ErrorCode.VERIFICATION_CODE_INVALID, "인증 코드가 5회 틀려 무효가 되었습니다. 코드를 다시 받아 주세요.");
     }
@@ -130,6 +129,6 @@ public class EmailVerificationService {
   }
 
   public static String normalize(String email) {
-    return email == null ? "" : email.trim().toLowerCase();
+    return email == null ? "" : email.trim().toLowerCase(Locale.ROOT);
   }
 }
