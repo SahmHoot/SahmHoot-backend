@@ -22,7 +22,7 @@ BACKUP_DIR="$PREFIX/var/backups/sahmhoot"
 DEPLOY_LOG="$PREFIX/var/log/sahmhoot-deploy.log"
 HEALTH_URL="http://127.0.0.1:8080/api/health"
 HEALTH_WAIT_SECONDS=90
-REQUIRED_KEYS="DB_USERNAME DB_PASSWORD JWT_SECRET CORS_ALLOWED_ORIGINS APP_ROOM_JOIN_BASE_URL"
+REQUIRED_KEYS="DB_USERNAME DB_PASSWORD JWT_SECRET CORS_ALLOWED_ORIGINS APP_ROOM_JOIN_BASE_URL MAIL_FROM"
 
 # 실행 로그(RUN_LOG)를 연 뒤에는 모든 출력이 그 파일로 가고, 안내 줄만 화면(3번)에도 보낸다.
 # ssh가 끊겨 화면 쪽이 닫혀도 쓰기 실패를 무시하고 배포를 계속한다.

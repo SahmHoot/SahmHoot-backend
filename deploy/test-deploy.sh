@@ -80,6 +80,7 @@ write_env() {
     echo "JWT_SECRET=$SECRET"
     echo "CORS_ALLOWED_ORIGINS=https://sahmhoot.com"
     echo "APP_ROOM_JOIN_BASE_URL=https://sahmhoot.com"
+    echo "MAIL_FROM=no-reply@sahmhoot.com"
   } > "$R/etc/sahmhoot.env"
 }
 write_env
@@ -154,6 +155,13 @@ grep -v '^APP_ROOM_JOIN_BASE_URL=' "$R/etc/sahmhoot.env" > "$T/env" && mv "$T/en
 if run all develop; then fail "실패로 끝나야 함"; else pass "실패로 끝남"; fi
 check "빠진 키 이름을 알려 줌" 'grep -q "APP_ROOM_JOIN_BASE_URL" "$T/out"'
 check "서비스를 건드리지 않음" '[ ! -s "$STUB_LOG" ]'
+write_env
+# #21부터 prod는 MAIL_FROM이 없으면 기동하지 않으므로, 교체 전에 멈춰야 한다.
+grep -v '^MAIL_FROM=' "$R/etc/sahmhoot.env" > "$T/env" && mv "$T/env" "$R/etc/sahmhoot.env"
+: > "$STUB_LOG"
+if run backend develop; then fail "MAIL_FROM이 없으면 실패해야 함"; else pass "MAIL_FROM이 없으면 실패"; fi
+check "MAIL_FROM을 알려 줌" 'grep -q "MAIL_FROM" "$T/out"'
+check "MAIL_FROM이 없을 때 서비스를 건드리지 않음" '[ ! -s "$STUB_LOG" ]'
 write_env
 sed 's/^SPRING_PROFILES_ACTIVE=prod$/SPRING_PROFILES_ACTIVE=local/' "$R/etc/sahmhoot.env" > "$T/env" && mv "$T/env" "$R/etc/sahmhoot.env"
 if run backend develop; then fail "prod가 아니면 실패해야 함"; else pass "prod가 아니면 실패"; fi

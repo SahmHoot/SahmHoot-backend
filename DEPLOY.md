@@ -82,7 +82,7 @@ flowchart LR
 
 값은 서버에만 둔다. 키 이름만 확인할 때는 `sudo grep -oE '^[A-Z_]+=' /etc/sahmhoot.env`를 쓴다. 키 목록과 설명은 레포 [`deploy/sahmhoot.env.example`](deploy/sahmhoot.env.example)에 있다.
 
-필수 키(`DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`, `CORS_ALLOWED_ORIGINS`, `APP_ROOM_JOIN_BASE_URL`, `SPRING_PROFILES_ACTIVE=prod`)가 하나라도 없으면 배포 스크립트가 멈춘다. systemd가 실제로 쓰는 값으로 확인하므로 `""`·`''`·공백만인 값과, 같은 키를 두 번 적은 경우(뒤의 값이 쓰인다)도 멈춘다. 키는 한 줄에 하나만 둔다. `application-prod.yml`은 DB 계정·`CORS_ALLOWED_ORIGINS`·`APP_ROOM_JOIN_BASE_URL`의 로컬 기본값을 쓰지 않으므로, 스크립트 없이 재시작해도 이 넷이 없으면 기동하지 않는다.
+필수 키(`DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`, `CORS_ALLOWED_ORIGINS`, `APP_ROOM_JOIN_BASE_URL`, `MAIL_FROM`, `SPRING_PROFILES_ACTIVE=prod`)가 하나라도 없으면 배포 스크립트가 멈춘다. systemd가 실제로 쓰는 값으로 확인하므로 `""`·`''`·공백만인 값과, 같은 키를 두 번 적은 경우(뒤의 값이 쓰인다)도 멈춘다. 키는 한 줄에 하나만 둔다. `application-prod.yml`은 DB 계정·`CORS_ALLOWED_ORIGINS`·`APP_ROOM_JOIN_BASE_URL`의 로컬 기본값을 쓰지 않으므로, 스크립트 없이 재시작해도 이 넷이 없으면 기동하지 않는다. `MAIL_FROM`도 prod에서 비어 있으면 앱이 기동을 멈춘다(#21 `ProductionAuthSettingsValidator`).
 
 | 키 | 상태 | 비고 |
 |---|---|---|
@@ -91,7 +91,8 @@ flowchart LR
 | `CORS_ALLOWED_ORIGINS` | 설정됨 | `https://sahmhoot.com,https://www.sahmhoot.com`. 필수. 없으면 브라우저 로그인·WebSocket이 403 |
 | `SPRING_PROFILES_ACTIVE` | 설정됨 | `prod`여야 한다. 없으면 `local`로 떠서 Swagger가 켜진다 |
 | `APP_ROOM_JOIN_BASE_URL` | 설정됨 (2026-11-18 확인) | 필수. `https://sahmhoot.com`. 없으면 참여 링크·QR이 localhost를 가리킨다 |
-| `MAIL_HOST`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM` | 미설정 | #21에서 설정. 비어 있으면 인증 코드가 메일 대신 서버 로그에 찍힌다 |
+| `MAIL_FROM` | **미설정** (2026-11-18 확인) | 필수(#21). 인증 메일 보내는 주소. 넣기 전에는 배포 스크립트가 멈춘다 |
+| `MAIL_HOST` | 미설정 | 선택. 비우면 같은 VM의 Postfix(`127.0.0.1:25`)로 보낸다. Postfix 설정은 #21 |
 | `ALLOWED_EMAIL_DOMAINS` | 미설정 | 가입 허용 도메인. 운영 전에 정한다 |
 
 `DB_URL`은 기본값(`localhost:3306/sahmhoot`)을 쓴다. 환경변수를 바꾼 뒤에는 `sudo systemctl restart sahmhoot`로 다시 읽게 한다.
@@ -128,7 +129,8 @@ tail -f ~/sahmhoot/deploy-last.log
 1. GCP 콘솔에서 디스크 스냅샷을 만든다. DB 백업과 `app.jar.bak`은 스크립트가 교체 전에 직접 만든다.
 2. 소스 폴더(`~/sahmhoot/backend`, `~/sahmhoot/frontend`)의 주인인 관리자 계정으로 접속한다. 스크립트는 자기 위치 기준으로 옆의 `frontend`를 찾는다.
 3. 두 소스 폴더에 커밋하지 않은 변경이 없는지 확인한다(`git -C ~/sahmhoot/backend status`, 프론트도 같이). `git status --ignored`로 `application-local.yml` 같은 파일이 남아 있지 않은지도 본다.
-4. 백엔드 소스를 스크립트가 있는 커밋으로 한 번 맞춘 뒤 실행한다.
+4. `/etc/sahmhoot.env`에 `MAIL_FROM`(#21)을 넣는다. 키 이름만 `sudo grep -oE '^[A-Z_]+=' /etc/sahmhoot.env`로 [`deploy/sahmhoot.env.example`](deploy/sahmhoot.env.example)의 필수 키와 비교한다.
+5. 백엔드 소스를 스크립트가 있는 커밋으로 한 번 맞춘 뒤 실행한다.
 
    ```bash
    git -C ~/sahmhoot/backend fetch origin
