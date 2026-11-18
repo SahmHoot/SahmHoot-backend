@@ -26,6 +26,12 @@ public class ChatMessage {
   @Column(name = "deleted_at")
   private Instant deletedAt;
 
+  public boolean markDeleted(Instant at) {
+    if (deletedAt != null) return false;
+    deletedAt = java.util.Objects.requireNonNull(at);
+    return true;
+  }
+
   public ChatMessage(Long roomId, Long senderParticipantId,
       String content, Long parentId, Instant createdAt) {
     this.roomId = roomId;

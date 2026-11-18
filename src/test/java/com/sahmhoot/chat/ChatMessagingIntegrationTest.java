@@ -1,14 +1,18 @@
 package com.sahmhoot.chat;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.doAnswer;
 
 import com.sahmhoot.auth.jwt.JwtProvider;
 import com.sahmhoot.chat.dto.SendChatRequest;
 import com.sahmhoot.chat.entity.ChatMessage;
 import com.sahmhoot.chat.event.ChatMessageEvent;
+import com.sahmhoot.chat.event.ChatStatusChangedEvent;
 import com.sahmhoot.chat.exception.ChatErrorCode;
 import com.sahmhoot.chat.exception.ChatException;
 import com.sahmhoot.chat.repository.ChatMessageRepository;
+import com.sahmhoot.chat.repository.ChatPinRepository;
+import com.sahmhoot.chat.service.ChatModerationService;
 import com.sahmhoot.chat.service.ChatService;
 import com.sahmhoot.quiz.lock.RoomLockManager;
 import com.sahmhoot.room.entity.Room;
@@ -21,12 +25,14 @@ import com.sahmhoot.room.service.RoomManagementService;
 import com.sahmhoot.user.Role;
 import com.sahmhoot.user.User;
 import com.sahmhoot.user.UserRepository;
+import jakarta.persistence.EntityManager;
 import java.lang.reflect.Type;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -40,6 +46,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -59,6 +66,7 @@ import org.springframework.messaging.support.AbstractSubscribableChannel;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.web.socket.WebSocketHttpHeaders;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
@@ -72,8 +80,8 @@ import tools.jackson.databind.json.JsonMapper;
 class ChatMessagingIntegrationTest {
   @TestConfiguration
   static class Config {
-    @Bean CommitProbe chatCommitProbe(DataSource source, RoomLockManager locks) {
-      return new CommitProbe(source, locks);
+    @Bean CommitProbe chatCommitProbe(DataSource source, RoomLockManager locks, EntityManager entityManager) {
+      return new CommitProbe(source, locks, entityManager);
     }
   }
 
@@ -81,9 +89,26 @@ class ChatMessagingIntegrationTest {
     final DataSource source;
     final RoomLockManager locks;
     final List<Observation> committed = new CopyOnWriteArrayList<>();
+    final EntityManager entityManager;
     volatile Long rejectRoom;
+    volatile Long rejectRestrictionRoom;
 
-    CommitProbe(DataSource source, RoomLockManager locks) { this.source = source; this.locks = locks; }
+    CommitProbe(DataSource source, RoomLockManager locks, EntityManager entityManager) {
+      this.source = source;
+      this.locks = locks;
+      this.entityManager = entityManager;
+    }
+
+    @EventListener
+    public void rejectRestriction(ChatStatusChangedEvent event) {
+      if (event.roomId().equals(rejectRestrictionRoom)) {
+        entityManager.flush();
+        entityManager.createNativeQuery("""
+            INSERT INTO chat_restrictions (room_id, participant_id, restricted_by_user_id, restricted_at)
+            VALUES (:roomId, -1, :userId, UTC_TIMESTAMP(6))
+            """).setParameter("roomId", event.roomId()).setParameter("userId", event.userId()).executeUpdate();
+      }
+    }
 
     @EventListener
     public void reject(ChatMessageEvent event) {
@@ -111,13 +136,17 @@ class ChatMessagingIntegrationTest {
   @Autowired RoomRepository rooms;
   @Autowired RoomParticipantRepository participants;
   @Autowired ChatMessageRepository messages;
+  @MockitoSpyBean ChatPinRepository pins;
+  @Autowired EntityManager entityManager;
   @Autowired ChatService service;
+  @Autowired ChatModerationService moderation;
   @Autowired RoomManagementService management;
   @Autowired JwtProvider jwt;
   @Autowired JdbcTemplate jdbc;
   @Autowired JsonMapper json;
   @Autowired CommitProbe probe;
   @Autowired @Qualifier("brokerChannel") AbstractSubscribableChannel brokerChannel;
+  private final HttpClient http = HttpClient.newHttpClient();
   private final List<User> createdUsers = new ArrayList<>();
   private final List<Room> createdRooms = new ArrayList<>();
   private final List<StompSession> sessions = new ArrayList<>();
@@ -148,6 +177,7 @@ class ChatMessagingIntegrationTest {
     client.stop();
     scheduler.shutdown();
     probe.rejectRoom = null;
+    probe.rejectRestrictionRoom = null;
     for (Room target : createdRooms) {
       jdbc.update("DELETE FROM chat_pins WHERE room_id = ?", target.getId());
       jdbc.update("UPDATE chat_messages SET parent_id = NULL WHERE room_id = ?", target.getId());
@@ -181,6 +211,184 @@ class ChatMessagingIntegrationTest {
     assertThat(reply.path("senderParticipantId").asLong()).isEqualTo(ownerParticipantId);
     assertThat(reply.path("nickname").asText()).isEqualTo("담당교수");
     assertThat(reply.path("isOwner").asBoolean()).isTrue();
+  }
+
+  @Test void onlyTheOwnerCanManageChatAndTargetsMustBelongToThatRoom() throws Exception {
+    var professor = user(Role.PROFESSOR, "다른 교수");
+    var otherRoom = room(professor);
+    join(room, professor, "다른 참가자");
+    var otherParticipant = join(otherRoom, student, "다른 방 학생");
+    var foreign = messages.saveAndFlush(new ChatMessage(otherRoom.getId(), otherParticipant, "다른 방 질문",
+        null, Instant.now()));
+    var here = messages.saveAndFlush(new ChatMessage(room.getId(), studentParticipantId, "이 방 질문",
+        null, Instant.now()));
+
+    for (User nonOwner : List.of(student, professor)) {
+      for (var request : List.of(
+          List.of("GET", "/messages/" + here.getId() + "/author"),
+          List.of("GET", "/messages/-1/author"),
+          List.of("DELETE", "/messages/" + here.getId()),
+          List.of("DELETE", "/messages/-1"))) {
+        assertModerationError(nonOwner, request.getFirst(), request.getLast(), 403, "FORBIDDEN");
+      }
+      for (long target : List.of(studentParticipantId, -1L)) {
+        assertModerationError(changeRestriction(nonOwner, target, true), 403, "FORBIDDEN");
+        assertModerationError(changeRestriction(nonOwner, target, false), 403, "FORBIDDEN");
+      }
+    }
+    assertModerationError(changeRestriction(owner, ownerParticipantId, true), 400, "CANNOT_BLOCK_OWNER");
+    for (long unavailable : List.of(otherParticipant, -1L)) {
+      assertModerationError(changeRestriction(owner, unavailable, true), 404, "PARTICIPANT_NOT_FOUND");
+      assertModerationError(changeRestriction(owner, unavailable, false), 404, "PARTICIPANT_NOT_FOUND");
+    }
+    for (long unavailable : List.of(foreign.getId(), -1L)) {
+      assertModerationError(owner, "GET", "/messages/" + unavailable + "/author", 404, "MESSAGE_NOT_FOUND");
+      assertModerationError(owner, "DELETE", "/messages/" + unavailable, 404, "MESSAGE_NOT_FOUND");
+    }
+    assertThat(restrictionCount(room, studentParticipantId)).isZero();
+    assertThat(messages.findById(here.getId()).orElseThrow().getDeletedAt()).isNull();
+    assertThat(messages.findById(foreign.getId()).orElseThrow().getDeletedAt()).isNull();
+  }
+
+  @Test void restrictionChangesReachBothTabsAndControlActualSendingOnlyInTheirRoom() throws Exception {
+    var observer = user(Role.STUDENT, "관찰 학생");
+    join(room, observer, "익명 관찰자");
+    var otherRoom = room(owner);
+    var otherParticipant = join(otherRoom, student, "다른 방 닉네임");
+    jdbc.update("INSERT INTO chat_restrictions VALUES (?, ?, ?, UTC_TIMESTAMP(6))",
+        otherRoom.getId(), otherParticipant, owner.getId());
+    var one = connect(student);
+    var two = connect(student);
+    var oneStatus = subscribe(one, personalTopic());
+    var twoStatus = subscribe(two, personalTopic());
+    var observerStatus = subscribe(connect(observer), personalTopic());
+    var otherRoomStatus = subscribe(one, "/user/queue/rooms/" + otherRoom.getId() + "/me");
+    var errors = subscribe(one, "/user/queue/errors");
+    var broadcast = subscribe(one, chatTopic());
+    assertRestrictionResponse(changeRestriction(owner, studentParticipantId, true), true);
+    var restricted = take(oneStatus);
+    assertThat(take(twoStatus)).isEqualTo(restricted);
+    assertThat(restricted.path("type").asText()).isEqualTo("MY_STATUS");
+    assertThat(restricted.path("chatBlocked").asBoolean()).isTrue();
+    assertThat(restricted.size()).isEqualTo(3);
+    assertThat(restrictionCount(room, studentParticipantId)).isEqualTo(1);
+    assertThat(state(student).path("me").path("chatBlocked").asBoolean()).isTrue();
+
+    assertRestrictionResponse(changeRestriction(owner, studentParticipantId, true), true);
+    send(one, "전송이 제한된 메시지");
+    assertThat(take(errors).path("code").asText()).isEqualTo("CHAT_BLOCKED");
+    assertThat(broadcast.poll(250, TimeUnit.MILLISECONDS)).isNull();
+    assertThat(messageCount()).isZero();
+
+    assertRestrictionResponse(changeRestriction(owner, studentParticipantId, false), false);
+    var released = take(oneStatus);
+    assertThat(take(twoStatus)).isEqualTo(released);
+    assertThat(released.path("type").asText()).isEqualTo("MY_STATUS");
+    assertThat(released.path("chatBlocked").asBoolean()).isFalse();
+    assertRestrictionResponse(changeRestriction(owner, studentParticipantId, false), false);
+    assertThat(restrictionCount(room, studentParticipantId)).isZero();
+    assertThat(restrictionCount(otherRoom, otherParticipant)).isEqualTo(1);
+    assertThat(state(student).path("me").path("chatBlocked").asBoolean()).isFalse();
+    send(two, "제한 해제 후 정상 전송");
+    assertThat(take(broadcast).path("type").asText()).isEqualTo("MESSAGE");
+    assertThat(messageCount()).isEqualTo(1);
+    assertThat(oneStatus.poll(250, TimeUnit.MILLISECONDS)).isNull();
+    assertThat(twoStatus).isEmpty();
+    assertThat(observerStatus).isEmpty();
+    assertThat(otherRoomStatus).isEmpty();
+  }
+
+  @Test void deleteKeepsAuthorAndReplyLinksAndRemovesOnlyItsPinBeforeBroadcast() throws Exception {
+    var message = messages.saveAndFlush(new ChatMessage(room.getId(), studentParticipantId, "삭제된 질문",
+        null, Instant.now()));
+    var reply = messages.saveAndFlush(new ChatMessage(room.getId(), ownerParticipantId, "남은 답글",
+        message.getId(), Instant.now()));
+    pin(message.getId());
+    pin(reply.getId());
+    var studentTopic = subscribe(connect(student), chatTopic());
+    var ownerTopic = subscribe(connect(owner), chatTopic());
+    String path = "/messages/" + message.getId();
+
+    var committedAtPublication = new CompletableFuture<Boolean>();
+    var observer = new ChannelInterceptor() {
+      @Override public Message<?> preSend(Message<?> frame, MessageChannel channel) {
+        if (chatTopic().equals(SimpMessageHeaderAccessor.getDestination(frame.getHeaders()))) {
+          try {
+            committedAtPublication.complete(isDeletionCommitted(message.getId()));
+          } catch (SQLException error) {
+            committedAtPublication.completeExceptionally(error);
+          }
+        }
+        return frame;
+      }
+    };
+    brokerChannel.addInterceptor(observer);
+    try {
+      assertThat(moderate(owner, "DELETE", path).statusCode()).isEqualTo(204);
+      assertThat(committedAtPublication.get(7, TimeUnit.SECONDS)).isTrue();
+    } finally {
+      brokerChannel.removeInterceptor(observer);
+    }
+    var deletedEvent = take(studentTopic);
+    assertThat(take(ownerTopic)).isEqualTo(deletedEvent);
+    assertThat(deletedEvent.path("type").asText()).isEqualTo("MESSAGE_DELETED");
+    assertThat(deletedEvent.path("messageId").asLong()).isEqualTo(message.getId());
+    assertThat(deletedEvent.size()).isEqualTo(3);
+    var deleted = messages.findById(message.getId()).orElseThrow();
+    assertThat(deleted.getDeletedAt()).isNotNull();
+    assertThat(deleted.getSenderParticipantId()).isEqualTo(studentParticipantId);
+    assertThat(deleted.getContent()).isEqualTo("삭제된 질문");
+    assertThat(messages.findById(reply.getId()).orElseThrow().getParentId()).isEqualTo(message.getId());
+    assertThat(pinnedIds()).containsExactly(reply.getId());
+
+    assertThat(moderate(owner, "DELETE", path).statusCode()).isEqualTo(204);
+    assertThat(messages.findById(message.getId()).orElseThrow().getDeletedAt()).isEqualTo(deleted.getDeletedAt());
+    assertThat(studentTopic.poll(250, TimeUnit.MILLISECONDS)).isNull();
+    assertThat(ownerTopic).isEmpty();
+
+    var response = moderate(owner, "GET", path + "/author");
+    assertThat(response.statusCode()).isEqualTo(200);
+    var author = json.readTree(response.body());
+    assertThat(author.path("participantId").asLong()).isEqualTo(studentParticipantId);
+    assertThat(author.path("nickname").asText()).isEqualTo("익명학생");
+    assertThat(author.path("email").asText()).isEqualTo(student.getEmail());
+    assertModerationError(student, "GET", path + "/author", 403, "FORBIDDEN");
+    var snapshot = state(student);
+    for (String list : List.of("recentMessages", "pinnedMessages")) {
+      assertThat(snapshot.path(list).size()).isEqualTo(1);
+      var visible = snapshot.path(list).get(0);
+      assertThat(visible.path("id").asLong()).isEqualTo(reply.getId());
+      assertThat(visible.path("parentPreview").isNull()).isTrue();
+      assertThat(visible.has("email")).isFalse();
+    }
+  }
+
+  @Test void databaseFailureDuringPinRemovalRollsBackTheDeleteAndSuppressesBroadcast() throws Exception {
+    var message = messages.saveAndFlush(new ChatMessage(room.getId(), studentParticipantId, "유지할 질문",
+        null, Instant.now()));
+    pin(message.getId());
+    var received = subscribe(connect(student), chatTopic());
+    doAnswer(invocation -> {
+      entityManager.flush();
+      jdbc.update("DELETE FROM chat_pins WHERE room_id = ? AND message_id = ?", room.getId(), message.getId());
+      // MySQL에서 존재하지 않는 메시지의 고정 FK를 거부한다.
+      pin(-1L);
+      return null;
+    }).when(pins).removePin(room.getId(), message.getId());
+
+    assertModerationError(owner, "DELETE", "/messages/" + message.getId(), 500, "INTERNAL_ERROR");
+    assertThat(messages.findById(message.getId()).orElseThrow().getDeletedAt()).isNull();
+    assertThat(pinnedIds()).containsExactly(message.getId());
+    assertThat(received.poll(250, TimeUnit.MILLISECONDS)).isNull();
+  }
+
+  @Test void databaseFailureAfterFlushingRestrictionDoesNotPublishMyStatus() throws Exception {
+    var status = subscribe(connect(student), personalTopic());
+    probe.rejectRestrictionRoom = room.getId();
+
+    assertModerationError(changeRestriction(owner, studentParticipantId, true), 500, "INTERNAL_ERROR");
+    assertThat(restrictionCount(room, studentParticipantId)).isZero();
+    assertThat(status.poll(250, TimeUnit.MILLISECONDS)).isNull();
   }
 
   @Test void sixthMessageAcrossTwoTabsIsRejectedOnlyInSendingTabAndNeverStored() throws Exception {
@@ -476,6 +684,100 @@ class ChatMessagingIntegrationTest {
     }
   }
 
+
+  @Test void restrictionWaitsForInFlightSendAndBlocksTheNextMessage() throws Exception {
+    var sender = connect(student);
+    var errors = subscribe(sender, "/user/queue/errors");
+    var topic = subscribe(sender, chatTopic());
+    var restrictionStarted = new CountDownLatch(1);
+
+    try (var executor = Executors.newFixedThreadPool(2); var gate = new ChatPublicationGate()) {
+      var sending = executor.submit(() ->
+          service.send(room.getId(), student.getId(), new SendChatRequest("제한 직전 전송", null)));
+      assertThat(gate.publishing.await(7, TimeUnit.SECONDS)).isTrue();
+      var restricting = executor.submit(() -> {
+        restrictionStarted.countDown();
+        moderation.updateRestriction(room.getId(), owner.getId(), studentParticipantId, true);
+      });
+      assertThat(restrictionStarted.await(7, TimeUnit.SECONDS)).isTrue();
+      assertThatThrownBy(() -> restricting.get(200, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
+      assertThat(restrictionCount(room, studentParticipantId)).isZero();
+
+      gate.release.countDown();
+      sending.get(7, TimeUnit.SECONDS);
+      restricting.get(7, TimeUnit.SECONDS);
+      assertThat(take(topic).path("content").asText()).isEqualTo("제한 직전 전송");
+      assertThat(restrictionCount(room, studentParticipantId)).isEqualTo(1);
+
+      send(sender, "제한 이후 전송");
+      assertThat(take(errors).path("code").asText()).isEqualTo("CHAT_BLOCKED");
+      assertThat(messageCount()).isEqualTo(1);
+      assertThat(gate.publications.get()).isEqualTo(1);
+    }
+  }
+
+  @Test void concurrentDeletesPublishOnceAndPreserveTheFirstDeletionTime() throws Exception {
+    var message = messages.saveAndFlush(new ChatMessage(room.getId(), studentParticipantId, "삭제 대상",
+        null, Instant.now()));
+    pin(message.getId());
+    var topic = subscribe(connect(student), chatTopic());
+    var secondStarted = new CountDownLatch(1);
+
+    try (var executor = Executors.newFixedThreadPool(2); var gate = new ChatPublicationGate()) {
+      var first = executor.submit(() -> moderation.delete(room.getId(), owner.getId(), message.getId()));
+      assertThat(gate.publishing.await(7, TimeUnit.SECONDS)).isTrue();
+      var firstDeletedAt = messages.findById(message.getId()).orElseThrow().getDeletedAt();
+      assertThat(firstDeletedAt).isNotNull();
+
+      var second = executor.submit(() -> {
+        secondStarted.countDown();
+        moderation.delete(room.getId(), owner.getId(), message.getId());
+      });
+      assertThat(secondStarted.await(7, TimeUnit.SECONDS)).isTrue();
+      assertThatThrownBy(() -> second.get(200, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
+
+      gate.release.countDown();
+      first.get(7, TimeUnit.SECONDS);
+      second.get(7, TimeUnit.SECONDS);
+      var event = take(topic);
+      assertThat(event.path("type").asText()).isEqualTo("MESSAGE_DELETED");
+      assertThat(event.path("messageId").asLong()).isEqualTo(message.getId());
+      assertThat(gate.publications.get()).isEqualTo(1);
+      assertThat(messages.findById(message.getId()).orElseThrow().getDeletedAt()).isEqualTo(firstDeletedAt);
+      assertThat(pinnedIds()).isEmpty();
+    }
+  }
+
+  private final class ChatPublicationGate implements ChannelInterceptor, AutoCloseable {
+    private final CountDownLatch publishing = new CountDownLatch(1);
+    private final CountDownLatch release = new CountDownLatch(1);
+    private final AtomicInteger publications = new AtomicInteger();
+
+    private ChatPublicationGate() {
+      brokerChannel.addInterceptor(this);
+    }
+
+    @Override public Message<?> preSend(Message<?> message, MessageChannel channel) {
+      if (SimpMessageHeaderAccessor.getMessageType(message.getHeaders()) != SimpMessageType.MESSAGE
+          || !chatTopic().equals(SimpMessageHeaderAccessor.getDestination(message.getHeaders()))) return message;
+      if (publications.incrementAndGet() == 1) {
+        publishing.countDown();
+        try {
+          if (!release.await(7, TimeUnit.SECONDS)) throw new IllegalStateException("Chat publication was not released");
+        } catch (InterruptedException error) {
+          Thread.currentThread().interrupt();
+          throw new IllegalStateException("Chat publication interrupted", error);
+        }
+      }
+      return message;
+    }
+
+    @Override public void close() {
+      release.countDown();
+      brokerChannel.removeInterceptor(this);
+    }
+  }
+
   private User user(Role role, String name) {
     var user = users.saveAndFlush(User.create(UUID.randomUUID() + "@test.invalid", "test-only", name, null, role));
     createdUsers.add(user);
@@ -546,10 +848,80 @@ class ChatMessagingIntegrationTest {
     session.send(headers, body.getBytes(StandardCharsets.UTF_8));
   }
 
+  private boolean isDeletionCommitted(Long messageId) throws SQLException {
+    // 원래 트랜잭션과 연결을 공유하지 않아 미커밋 갱신은 보이지 않는다.
+    try (var connection = probe.source.getConnection();
+        var query = connection.prepareStatement("""
+            SELECT m.deleted_at IS NOT NULL AND p.message_id IS NULL
+            FROM chat_messages m LEFT JOIN chat_pins p ON p.room_id = m.room_id AND p.message_id = m.id
+            WHERE m.room_id = ? AND m.id = ?
+            """)) {
+      query.setLong(1, room.getId());
+      query.setLong(2, messageId);
+      try (var result = query.executeQuery()) {
+        return result.next() && result.getBoolean(1);
+      }
+    }
+  }
+
+  private String personalTopic() { return "/user/queue/rooms/" + room.getId() + "/me"; }
+
+  private long restrictionCount(Room target, Long participantId) {
+    return jdbc.queryForObject("SELECT COUNT(*) FROM chat_restrictions WHERE room_id = ? AND participant_id = ?",
+        Long.class, target.getId(), participantId);
+  }
+
+  private void pin(Long messageId) {
+    jdbc.update("INSERT INTO chat_pins VALUES (?, ?, ?, UTC_TIMESTAMP(6))",
+        room.getId(), messageId, owner.getId());
+  }
+
+  private List<Long> pinnedIds() {
+    return jdbc.queryForList("SELECT message_id FROM chat_pins WHERE room_id = ?", Long.class, room.getId());
+  }
+
+  private HttpResponse<String> moderate(User actor, String method, String path) throws Exception {
+    var request = moderationRequest(actor, path).method(method, HttpRequest.BodyPublishers.noBody()).build();
+    return http.send(request, HttpResponse.BodyHandlers.ofString());
+  }
+
+  private HttpResponse<String> changeRestriction(User actor, long target, boolean blocked) throws Exception {
+    var request = moderationRequest(actor, "/participants/" + target).header("Content-Type", "application/json")
+        .method("PATCH", HttpRequest.BodyPublishers.ofString("{\"chatBlocked\":" + blocked + "}")).build();
+    return http.send(request, HttpResponse.BodyHandlers.ofString());
+  }
+
+  private HttpRequest.Builder moderationRequest(User actor, String path) {
+    var url = URI.create("http://localhost:" + port + "/api/rooms/" + room.getId() + path);
+    return HttpRequest.newBuilder(url)
+        .header("Authorization", "Bearer " + jwt.issue(actor.getId(), actor.getRole()).accessToken());
+  }
+
+  private void assertRestrictionResponse(HttpResponse<String> response, boolean blocked) {
+    assertThat(response.statusCode()).isEqualTo(200);
+    var body = json.readTree(response.body());
+    assertThat(body.path("participantId").asLong()).isEqualTo(studentParticipantId);
+    assertThat(body.path("nickname").asText()).isEqualTo("익명학생");
+    assertThat(body.path("chatBlocked").isBoolean()).isTrue();
+    assertThat(body.path("chatBlocked").asBoolean()).isEqualTo(blocked);
+  }
+
+  private void assertModerationError(User actor, String method, String path, int status, String code)
+      throws Exception {
+    assertModerationError(moderate(actor, method, path), status, code);
+  }
+
+  private void assertModerationError(HttpResponse<String> response, int status, String code) {
+    assertThat(response.statusCode()).isEqualTo(status);
+    var body = json.readTree(response.body());
+    assertThat(body.path("code").asText()).isEqualTo(code);
+    assertThat(body.has("email")).isFalse();
+  }
+
   private JsonNode state(User user) throws Exception {
     var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/rooms/" + room.getId() + "/state"))
         .header("Authorization", "Bearer " + jwt.issue(user.getId(), user.getRole()).accessToken()).GET().build();
-    var response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+    var response = http.send(request, HttpResponse.BodyHandlers.ofString());
     assertThat(response.statusCode()).isEqualTo(200);
     return json.readTree(response.body());
   }
