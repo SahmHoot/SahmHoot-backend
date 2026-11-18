@@ -7,6 +7,8 @@ import java.util.Set;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface RoomParticipantRepository extends JpaRepository<RoomParticipant, Long> {
+  List<RoomParticipant> findByRoomIdAndIdIn(Long roomId, Set<Long> participantIds);
+
   Optional<RoomParticipant> findByRoomIdAndUserIdAndLeftAtIsNull(Long roomId, Long userId);
 
   Optional<RoomParticipant> findByRoomIdAndUserId(Long roomId, Long userId);
