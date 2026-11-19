@@ -8,6 +8,7 @@ import com.sahmhoot.chat.dto.SendChatRequest;
 import com.sahmhoot.chat.entity.ChatMessage;
 import com.sahmhoot.chat.event.ChatMessageEvent;
 import com.sahmhoot.chat.event.ChatStatusChangedEvent;
+import com.sahmhoot.chat.event.NoticePinnedEvent;
 import com.sahmhoot.chat.exception.ChatErrorCode;
 import com.sahmhoot.chat.exception.ChatException;
 import com.sahmhoot.chat.repository.ChatMessageRepository;
@@ -68,6 +69,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.socket.WebSocketHttpHeaders;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
@@ -92,6 +95,7 @@ class ChatMessagingIntegrationTest {
     final EntityManager entityManager;
     volatile Long rejectRoom;
     volatile Long rejectRestrictionRoom;
+    volatile Long rejectPinCommitRoom;
 
     CommitProbe(DataSource source, RoomLockManager locks, EntityManager entityManager) {
       this.source = source;
@@ -108,6 +112,17 @@ class ChatMessagingIntegrationTest {
             VALUES (:roomId, -1, :userId, UTC_TIMESTAMP(6))
             """).setParameter("roomId", event.roomId()).setParameter("userId", event.userId()).executeUpdate();
       }
+    }
+
+    @EventListener
+    public void rejectPinCommit(NoticePinnedEvent event) {
+      if (!event.roomId().equals(rejectPinCommitRoom)) return;
+      // 리스너 실행 순서와 무관하게 모든 리스너가 돈 뒤 커밋 단계에서 실패시킨다.
+      TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+        @Override public void beforeCommit(boolean readOnly) {
+          throw new IllegalStateException("Force rollback at commit");
+        }
+      });
     }
 
     @EventListener
@@ -178,6 +193,7 @@ class ChatMessagingIntegrationTest {
     scheduler.shutdown();
     probe.rejectRoom = null;
     probe.rejectRestrictionRoom = null;
+    probe.rejectPinCommitRoom = null;
     for (Room target : createdRooms) {
       jdbc.update("DELETE FROM chat_pins WHERE room_id = ?", target.getId());
       jdbc.update("UPDATE chat_messages SET parent_id = NULL WHERE room_id = ?", target.getId());
@@ -408,6 +424,22 @@ class ChatMessagingIntegrationTest {
     assertThat(studentTopic.poll(250, TimeUnit.MILLISECONDS)).isNull();
     assertThat(pinnedIdsOf(state(student))).containsExactly(question.getId());
     assertThat(messages.findById(answer.getId()).orElseThrow().getDeletedAt()).isNull();
+  }
+
+  @Test void pinThatFailsAtCommitIsRolledBackAndNeverBroadcast() throws Exception {
+    var message = messages.saveAndFlush(new ChatMessage(room.getId(), studentParticipantId, "고정 실패",
+        null, Instant.now()));
+    var received = subscribe(connect(student), chatTopic());
+    probe.rejectPinCommitRoom = room.getId();
+
+    assertPinError(owner, "PUT", message.getId(), 500, "INTERNAL_ERROR");
+    assertThat(pinnedIds()).isEmpty();
+    assertThat(received.poll(250, TimeUnit.MILLISECONDS)).isNull();
+
+    probe.rejectPinCommitRoom = null;
+    assertThat(pinRequest(owner, "PUT", message.getId()).statusCode()).isEqualTo(200);
+    assertThat(take(received).path("type").asText()).isEqualTo("NOTICE_PINNED");
+    assertThat(pinnedIds()).containsExactly(message.getId());
   }
 
   @Test void onlyTheOwnerOfAnOpenRoomCanPinUndeletedMessagesOfThatRoom() throws Exception {
