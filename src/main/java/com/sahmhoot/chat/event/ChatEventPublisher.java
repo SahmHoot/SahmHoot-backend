@@ -39,4 +39,14 @@ public class ChatEventPublisher {
   public void publish(ChatMessageDeletedEvent event) {
     messaging.convertAndSend("/topic/rooms/" + event.roomId() + "/chat", event.payload());
   }
+
+  @TransactionalEventListener
+  public void publish(NoticePinnedEvent event) {
+    messaging.convertAndSend("/topic/rooms/" + event.roomId() + "/chat", event.payload());
+  }
+
+  @TransactionalEventListener
+  public void publish(NoticeUnpinnedEvent event) {
+    messaging.convertAndSend("/topic/rooms/" + event.roomId() + "/chat", event.payload());
+  }
 }

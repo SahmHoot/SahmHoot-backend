@@ -1,6 +1,7 @@
 package com.sahmhoot.chat.exception;
 
 import com.sahmhoot.chat.controller.ChatModerationController;
+import com.sahmhoot.chat.controller.ChatPinController;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -12,13 +13,13 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @Slf4j
-@RestControllerAdvice(assignableTypes = ChatModerationController.class)
+@RestControllerAdvice(assignableTypes = {ChatModerationController.class, ChatPinController.class})
 public class ChatRestExceptionHandler {
   @ExceptionHandler(ChatException.class)
   public ResponseEntity<ChatRestErrorResponse> business(ChatException error) {
     var status = switch (error.code()) {
       case FORBIDDEN, NOT_PARTICIPANT, CHAT_BLOCKED -> HttpStatus.FORBIDDEN;
-      case CANNOT_BLOCK_OWNER, VALIDATION_FAILED -> HttpStatus.BAD_REQUEST;
+      case CANNOT_BLOCK_OWNER, VALIDATION_FAILED, MESSAGE_DELETED -> HttpStatus.BAD_REQUEST;
       case ROOM_NOT_FOUND, MESSAGE_NOT_FOUND, PARTICIPANT_NOT_FOUND -> HttpStatus.NOT_FOUND;
       case ROOM_CLOSED -> HttpStatus.CONFLICT;
       case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;

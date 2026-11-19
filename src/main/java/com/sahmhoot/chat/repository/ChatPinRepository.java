@@ -9,5 +9,5 @@ import org.springframework.data.jpa.repository.Query;
 public interface ChatPinRepository extends JpaRepository<ChatPin, ChatPinId> {
   @Modifying(flushAutomatically = true)
   @Query("DELETE FROM ChatPin p WHERE p.id.roomId = :roomId AND p.id.messageId = :messageId")
-  void removePin(Long roomId, Long messageId);
+  int removePin(Long roomId, Long messageId);
 }
