@@ -10,7 +10,7 @@ public enum ErrorCode {
   FORBIDDEN(HttpStatus.FORBIDDEN, "권한이 없습니다."),
   EMAIL_ALREADY_EXISTS(HttpStatus.CONFLICT, "이미 가입된 이메일입니다."),
   EMAIL_DOMAIN_NOT_ALLOWED(HttpStatus.BAD_REQUEST, "허용되지 않은 이메일 도메인입니다."),
-  VERIFICATION_TOO_FREQUENT(HttpStatus.TOO_MANY_REQUESTS, "인증 코드는 60초에 한 번 보낼 수 있습니다."),
+  VERIFICATION_TOO_FREQUENT(HttpStatus.TOO_MANY_REQUESTS, "인증 코드는 30초에 한 번 보낼 수 있습니다."),
   MAIL_SEND_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요."),
   VERIFICATION_NOT_FOUND(HttpStatus.NOT_FOUND, "인증 요청이 없습니다. 인증 코드를 다시 받아 주세요."),
   VERIFICATION_CODE_INVALID(HttpStatus.BAD_REQUEST, "인증 코드가 올바르지 않습니다."),

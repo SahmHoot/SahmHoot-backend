@@ -20,7 +20,7 @@ import org.springframework.stereotype.Service;
 public class EmailVerificationService {
 
   static final Duration CODE_TTL = Duration.ofMinutes(10);
-  static final Duration RESEND_INTERVAL = Duration.ofSeconds(60);
+  static final Duration RESEND_INTERVAL = Duration.ofSeconds(30);
   static final Duration SIGNUP_WINDOW = Duration.ofMinutes(30);
   static final int MAX_FAILURES = 5;
 
