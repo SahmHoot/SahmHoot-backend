@@ -3,6 +3,7 @@ package com.sahmhoot.auth.verification;
 import com.sahmhoot.auth.verification.EmailVerificationStore.Entry;
 import com.sahmhoot.auth.exception.ApiException;
 import com.sahmhoot.auth.exception.ErrorCode;
+import com.sahmhoot.user.User;
 import com.sahmhoot.user.UserRepository;
 import java.security.SecureRandom;
 import java.time.Clock;
@@ -11,6 +12,8 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -23,6 +26,8 @@ public class EmailVerificationService {
   static final Duration RESEND_INTERVAL = Duration.ofSeconds(30);
   static final Duration SIGNUP_WINDOW = Duration.ofMinutes(30);
   static final int MAX_FAILURES = 5;
+  static final Duration SWEEP_INTERVAL = Duration.ofMinutes(1);
+  private static final Logger log = LoggerFactory.getLogger(EmailVerificationService.class);
 
   private final EmailVerificationStore store;
   private final VerificationMailSender mailSender;
@@ -30,6 +35,7 @@ public class EmailVerificationService {
   private final List<String> allowedDomains;
   private final SecureRandom random = new SecureRandom();
   private Clock clock = Clock.systemUTC();
+  private Instant lastSweep = Instant.EPOCH;
 
   @Autowired
   public EmailVerificationService(
@@ -63,19 +69,29 @@ public class EmailVerificationService {
   }
 
   /**
-   * 비밀번호 찾기 인증 코드(#108). 가입 여부와 관계없이 같은 검사·같은 응답을 거치고, 가입된 이메일에만 메일을 보낸다.
+   * 비밀번호 찾기 인증 코드(#108). 가입 여부와 관계없이 같은 검사를 거쳐 같은 204로 끝나고, 가입된 이메일에만 메일을 보낸다.
    *
-   * <p>가입되지 않은 이메일에도 항목을 만들어 재발송 간격 응답(429)이 가입 여부를 드러내지 않게 한다. 그 코드는 아무에게도
-   * 전달되지 않으므로 확인 단계를 통과할 수 없다.
+   * <ul>
+   *   <li>가입되지 않은 이메일에도 항목을 만들어 재발송 간격 응답(429)이 가입 여부를 드러내지 않게 한다. 그 코드는 아무에게도
+   *       전달되지 않으므로 확인 단계를 통과할 수 없다.
+   *   <li>DB에 저장된 주소와 정확히 같을 때만 보낸다. DB 정렬 규칙이 악센트 등을 같게 보더라도 다른 수신함으로 코드가 가지 않는다.
+   *   <li>발송 실패를 응답으로 알리면 가입된 이메일만 503이 되어 가입 여부가 드러난다. 실패는 기록만 하고 항목도 남겨 재발송
+   *       간격을 같게 적용한다. 사용자는 30초 뒤 다시 요청한다.
+   * </ul>
    */
   public void sendPasswordReset(String rawEmail) {
     String email = normalize(rawEmail);
-    String key = passwordResetKey(email);
-    Entry current = issue(key);
-    if (!userRepository.existsByEmail(email)) {
+    Entry current = issue(passwordResetKey(email));
+    boolean registered =
+        userRepository.findByEmail(email).map(User::getEmail).filter(email::equals).isPresent();
+    if (!registered) {
       return;
     }
-    deliver(key, current, () -> mailSender.sendPasswordReset(email, current.code));
+    try {
+      mailSender.sendPasswordReset(email, current.code);
+    } catch (ApiException e) {
+      log.warn("비밀번호 재설정 메일 발송 실패");
+    }
   }
 
   /** 재발송 간격을 확인하고 새 항목으로 바꾼다. 새로 보내면 이전 항목을 지워 최신 하나만 남긴다. */
@@ -83,6 +99,7 @@ public class EmailVerificationService {
     String code = String.format(Locale.ROOT, "%06d", random.nextInt(1_000_000));
     synchronized (this) {
       Instant now = clock.instant();
+      sweep(now);
       Entry prev = store.get(key);
       if (prev != null && prev.sentAt.plus(RESEND_INTERVAL).isAfter(now)) {
         throw new ApiException(ErrorCode.VERIFICATION_TOO_FREQUENT);
@@ -91,6 +108,20 @@ public class EmailVerificationService {
       store.put(key, current);
       return current;
     }
+  }
+
+  /**
+   * 더 쓸 수 없는 항목(확인 전 코드 만료, 확인 뒤 가입·변경 가능 시간 경과)을 지운다. 새 항목을 만들 때 최대 1분에 한 번
+   * 저장소 전체를 훑는다. 요청 수 자체의 제한은 #99(IP 빈도 제한)에서 다룬다.
+   */
+  private void sweep(Instant now) {
+    if (now.isBefore(lastSweep.plus(SWEEP_INTERVAL))) {
+      return;
+    }
+    lastSweep = now;
+    store.removeIf(entry -> entry.verifiedAt == null
+        ? now.isAfter(entry.expiresAt)
+        : now.isAfter(entry.verifiedAt.plus(SIGNUP_WINDOW)));
   }
 
   /** SMTP 발송은 잠금 밖에서 한다. 실패하면 이번에 만든 항목만 지운다. */
@@ -134,9 +165,21 @@ public class EmailVerificationService {
     return verifyKey(normalize(rawEmail), code);
   }
 
-  /** 비밀번호 변경 직전 재확인(#108). 검증한 항목은 변경 트랜잭션 커밋 후 removePasswordReset으로 제거한다. */
-  public Entry verifyForPasswordReset(String rawEmail, String code) {
-    return verifyKey(passwordResetKey(normalize(rawEmail)), code);
+  /**
+   * 비밀번호 변경 직전 재확인(#108). 확인과 함께 항목을 예약해, 같은 코드로 동시에 들어온 두 번째 요청은 첫 요청이 끝날
+   * 때까지 EMAIL_NOT_VERIFIED가 된다. 커밋되면 removePasswordReset, 롤백되면 releasePasswordReset을 부른다.
+   */
+  public synchronized Entry reservePasswordReset(String rawEmail, String code) {
+    Entry entry = verifyKey(passwordResetKey(normalize(rawEmail)), code);
+    if (entry.reserved) {
+      throw new ApiException(ErrorCode.EMAIL_NOT_VERIFIED);
+    }
+    entry.reserved = true;
+    return entry;
+  }
+
+  public synchronized void releasePasswordReset(Entry entry) {
+    entry.reserved = false;
   }
 
   private synchronized Entry verifyKey(String key, String code) {
