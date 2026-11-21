@@ -213,12 +213,14 @@ class AuthFlowTest {
             "/api/auth/password-reset",
             "{\"email\":\"" + RESET_EMAIL + "\",\"code\":\"123456\",\"newPassword\":\"" + tooLong + "\"}")
         .andExpect(status().isBadRequest())
-        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+        .andExpect(jsonPath("$.fieldErrors[0].field").value("newPassword"));
     postJson(
             "/api/auth/signup",
             "{\"email\":\"flow@test.ac.kr\",\"code\":\"123456\",\"password\":\"" + tooLong
                 + "\",\"name\":\"홍길동\",\"role\":\"STUDENT\"}")
         .andExpect(status().isBadRequest())
-        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+        .andExpect(jsonPath("$.fieldErrors[0].field").value("password"));
   }
 }
