@@ -46,6 +46,21 @@ class VerificationMailSenderTest {
         .doesNotContain("{{verificationCode}}", "이메일을 인증해 주세요", "삼훗 가입을 위해");
   }
 
+  @Test void passwordResetMailHasItsOwnSubjectAndIntro() throws Exception {
+    when(provider.getIfAvailable()).thenReturn(transport);
+    var sender = new VerificationMailSender(provider, "127.0.0.1", "sender@test.invalid");
+    sender.sendPasswordReset("recipient@test.invalid", "654321");
+    var captured = org.mockito.ArgumentCaptor.forClass(MimeMessage.class);
+    verify(transport).send(captured.capture());
+    var message = captured.getValue();
+    message.saveChanges();
+    assertThat(message.getSubject()).isEqualTo("[SahmHoot!] 비밀번호 재설정 인증번호");
+    assertThat(MimeContent.body(message, "text/plain")).contains("비밀번호 재설정 요청", "654321", "10분");
+    assertThat(MimeContent.body(message, "text/html"))
+        .contains("654321", "<title>[SahmHoot!] 비밀번호 재설정 인증번호</title>")
+        .doesNotContain("{{verificationCode}}", "이메일 인증번호 발송");
+  }
+
   @Test void missingSettingsFailWithoutPrintingCode(CapturedOutput output) {
     when(provider.getIfAvailable()).thenReturn(transport);
     assertFailure(new VerificationMailSender(provider, "", "sender@test.invalid"));

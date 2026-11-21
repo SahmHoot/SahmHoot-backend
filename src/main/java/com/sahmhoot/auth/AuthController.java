@@ -4,6 +4,7 @@ import com.sahmhoot.auth.dto.AuthResponse;
 import com.sahmhoot.auth.dto.EmailConfirmRequest;
 import com.sahmhoot.auth.dto.EmailRequest;
 import com.sahmhoot.auth.dto.LoginRequest;
+import com.sahmhoot.auth.dto.PasswordResetRequest;
 import com.sahmhoot.auth.dto.SignupRequest;
 import com.sahmhoot.auth.verification.EmailVerificationService;
 import jakarta.validation.Valid;
@@ -15,7 +16,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
-/** 05 API 1~4번. 모두 공개. */
+/** 05 API 1~4번과 비밀번호 찾기(#108). 모두 공개. */
 @RestController
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor
@@ -45,5 +46,24 @@ public class AuthController {
   @PostMapping("/login")
   public AuthResponse login(@Valid @RequestBody LoginRequest req) {
     return authService.login(req);
+  }
+
+  /** 비밀번호 찾기 코드 발송(#108). 가입되지 않은 이메일도 같은 204를 돌려준다. */
+  @PostMapping("/password-reset/email-verifications")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void sendPasswordResetCode(@Valid @RequestBody EmailRequest req) {
+    verificationService.sendPasswordReset(req.email());
+  }
+
+  @PostMapping("/password-reset/email-verifications/confirm")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void confirmPasswordResetCode(@Valid @RequestBody EmailConfirmRequest req) {
+    verificationService.confirmPasswordReset(req.email(), req.code());
+  }
+
+  @PostMapping("/password-reset")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void resetPassword(@Valid @RequestBody PasswordResetRequest req) {
+    authService.resetPassword(req);
   }
 }

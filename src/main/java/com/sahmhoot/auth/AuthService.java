@@ -2,6 +2,7 @@ package com.sahmhoot.auth;
 
 import com.sahmhoot.auth.dto.AuthResponse;
 import com.sahmhoot.auth.dto.LoginRequest;
+import com.sahmhoot.auth.dto.PasswordResetRequest;
 import com.sahmhoot.auth.dto.SignupRequest;
 import com.sahmhoot.auth.jwt.JwtProvider;
 import com.sahmhoot.auth.verification.EmailVerificationService;
@@ -53,6 +54,32 @@ public class AuthService {
       }
     });
     return toResponse(user);
+  }
+
+  /**
+   * 비밀번호 찾기 마지막 단계(#108). 인증을 마친 코드를 예약하고 새 비밀번호를 저장한다. 커밋되면 항목을 지워 같은 코드를 다시
+   * 쓰지 못하게 하고, 롤백되면 예약만 풀어 다시 시도할 수 있게 한다. 가입되지 않은 이메일은 인증 단계를 통과할 수 없다.
+   */
+  @Transactional
+  public void resetPassword(PasswordResetRequest req) {
+    String email = EmailVerificationService.normalize(req.email());
+    var verification = verificationService.reservePasswordReset(email, req.code());
+    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+      @Override public void afterCompletion(int status) {
+        if (status == STATUS_COMMITTED) {
+          verificationService.removePasswordReset(email, verification);
+        } else {
+          verificationService.releasePasswordReset(verification);
+        }
+      }
+    });
+    // 메일을 보낸 주소(DB에 저장된 주소와 정확히 같은 주소)의 계정만 바꾼다.
+    User user =
+        userRepository
+            .findByEmail(email)
+            .filter(u -> u.getEmail().equals(email))
+            .orElseThrow(() -> new ApiException(ErrorCode.EMAIL_NOT_VERIFIED));
+    user.changePassword(passwordEncoder.encode(req.newPassword()));
   }
 
   @Transactional(readOnly = true)

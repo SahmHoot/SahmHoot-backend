@@ -3,6 +3,7 @@ package com.sahmhoot.auth.verification;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 import org.springframework.stereotype.Component;
 
 /**
@@ -31,6 +32,10 @@ public class EmailVerificationStore {
     entries.remove(email, expected);
   }
 
+  public void removeIf(Predicate<Entry> expired) {
+    entries.values().removeIf(expired);
+  }
+
   /** 이메일별 항목. 상태 변경은 EmailVerificationService의 짧은 임계 구역에서 수행한다. */
   public static final class Entry {
     final String code;
@@ -38,6 +43,8 @@ public class EmailVerificationStore {
     final Instant expiresAt;
     Instant verifiedAt;
     int failCount;
+    /** 비밀번호 변경 트랜잭션이 이 항목을 쓰는 중(#108). */
+    boolean reserved;
 
     public Entry(String code, Instant sentAt, Instant expiresAt) {
       this.code = code;
