@@ -63,4 +63,10 @@ public class User {
     u.updatedAt = u.createdAt;
     return u;
   }
+
+  /** 비밀번호 찾기(#108). 이미 발급된 토큰은 만료 전까지 유효하다(서버가 토큰 무효화 기능을 두지 않음). */
+  public void changePassword(String passwordHash) {
+    this.passwordHash = passwordHash;
+    this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
+  }
 }

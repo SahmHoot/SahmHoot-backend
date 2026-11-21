@@ -9,7 +9,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.jayway.jsonpath.JsonPath;
+import com.sahmhoot.auth.verification.EmailVerificationService;
 import com.sahmhoot.auth.verification.EmailVerificationStore;
+import com.sahmhoot.user.Role;
+import com.sahmhoot.user.User;
+import com.sahmhoot.user.UserRepository;
 import com.sahmhoot.auth.verification.VerificationMailSender;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterEach;
@@ -18,6 +22,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.http.HttpHeaders;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -33,11 +38,17 @@ class AuthFlowTest {
   @Autowired private MockMvc mockMvc;
   @Autowired private EmailVerificationStore store;
   @MockitoBean private VerificationMailSender mailSender;
+  @Autowired private UserRepository userRepository;
+  @Autowired private PasswordEncoder passwordEncoder;
+
+  private static final String RESET_EMAIL = "reset@test.ac.kr";
 
   @AfterEach void clearVerificationFixtures() {
     store.remove("flow@test.ac.kr");
     store.remove("again@test.ac.kr");
     store.remove("unsupported@test.ac.kr");
+    store.remove(EmailVerificationService.passwordResetKey(RESET_EMAIL));
+    store.remove(EmailVerificationService.passwordResetKey("nobody@test.ac.kr"));
   }
 
   private ResultActions postJson(String url, String body) throws Exception {
@@ -142,5 +153,51 @@ class AuthFlowTest {
     postJson("/api/auth/login", "{\"email\":\"none@test.ac.kr\",\"password\":\"abcd1234\"}")
         .andExpect(status().isUnauthorized())
         .andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"));
+  }
+
+  @Test
+  void 비밀번호_찾기로_새_비밀번호를_설정하면_새_비밀번호로만_로그인된다() throws Exception {
+    userRepository.save(
+        User.create(RESET_EMAIL, passwordEncoder.encode("oldpass123"), "재설정", null, Role.STUDENT));
+    postJson("/api/auth/password-reset/email-verifications", "{\"email\":\"" + RESET_EMAIL + "\"}")
+        .andExpect(status().isNoContent());
+    String code = store.get(EmailVerificationService.passwordResetKey(RESET_EMAIL)).code();
+    org.mockito.Mockito.verify(mailSender).sendPasswordReset(RESET_EMAIL, code);
+
+    String reset =
+        "{\"email\":\"" + RESET_EMAIL + "\",\"code\":\"" + code + "\",\"newPassword\":\"newpass456\"}";
+    postJson("/api/auth/password-reset", reset)
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("EMAIL_NOT_VERIFIED"));
+
+    postJson(
+            "/api/auth/password-reset/email-verifications/confirm",
+            "{\"email\":\"" + RESET_EMAIL + "\",\"code\":\"" + code + "\"}")
+        .andExpect(status().isNoContent());
+    postJson("/api/auth/password-reset", reset).andExpect(status().isNoContent());
+
+    postJson("/api/auth/login", "{\"email\":\"" + RESET_EMAIL + "\",\"password\":\"oldpass123\"}")
+        .andExpect(status().isUnauthorized());
+    postJson("/api/auth/login", "{\"email\":\"" + RESET_EMAIL + "\",\"password\":\"newpass456\"}")
+        .andExpect(status().isOk());
+  }
+
+  @Test
+  void 가입되지_않은_이메일도_비밀번호_찾기_발송은_같은_204() throws Exception {
+    postJson("/api/auth/password-reset/email-verifications", "{\"email\":\"nobody@test.ac.kr\"}")
+        .andExpect(status().isNoContent());
+    org.mockito.Mockito.verifyNoInteractions(mailSender);
+    postJson("/api/auth/password-reset/email-verifications", "{\"email\":\"nobody@test.ac.kr\"}")
+        .andExpect(status().isTooManyRequests())
+        .andExpect(jsonPath("$.code").value("VERIFICATION_TOO_FREQUENT"));
+  }
+
+  @Test
+  void 비밀번호_찾기_새_비밀번호도_가입과_같은_규칙() throws Exception {
+    postJson(
+            "/api/auth/password-reset",
+            "{\"email\":\"" + RESET_EMAIL + "\",\"code\":\"123456\",\"newPassword\":\"short\"}")
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
   }
 }

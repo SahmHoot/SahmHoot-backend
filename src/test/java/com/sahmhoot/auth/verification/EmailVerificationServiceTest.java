@@ -135,6 +135,73 @@ class EmailVerificationServiceTest {
     assertError(() -> service.verifyForSignup(EMAIL, "123456"), ErrorCode.EMAIL_NOT_VERIFIED);
   }
 
+  private static final String RESET_KEY = EmailVerificationService.passwordResetKey(EMAIL);
+
+  @Test void passwordResetMailsOnlyRegisteredEmailButAnswersTheSame() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    when(users.existsByEmail(EMAIL)).thenReturn(true);
+    service.sendPasswordReset(" Member@Test.Invalid ");
+    verify(sender).sendPasswordReset(eq(EMAIL), eq(store.get(RESET_KEY).code()));
+
+    String unknown = "nobody@test.invalid";
+    service.sendPasswordReset(unknown);
+    verify(sender, never()).sendPasswordReset(eq(unknown), anyString());
+    verify(sender, never()).send(anyString(), anyString());
+    assertThat(store.get(EmailVerificationService.passwordResetKey(unknown)))
+        .as("가입되지 않은 이메일도 재발송 간격 검사를 같게 받도록 항목을 만든다").isNotNull();
+    assertError(() -> service.sendPasswordReset(unknown), ErrorCode.VERIFICATION_TOO_FREQUENT);
+    assertError(() -> service.sendPasswordReset(EMAIL), ErrorCode.VERIFICATION_TOO_FREQUENT);
+  }
+
+  @Test void passwordResetDoesNotRejectRegisteredOrDisallowedDomain() {
+    var restricted = new EmailVerificationService(store, sender, users, "allowed.invalid");
+    when(users.existsByEmail(EMAIL)).thenReturn(true);
+    restricted.sendPasswordReset(EMAIL);
+    verify(sender).sendPasswordReset(eq(EMAIL), matches("[0-9]{6}"));
+  }
+
+  @Test void signupAndPasswordResetCodesAreSeparate() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    store.put(EMAIL, new EmailVerificationStore.Entry("111111", NOW, NOW.plusSeconds(600)));
+    store.put(RESET_KEY, new EmailVerificationStore.Entry("222222", NOW, NOW.plusSeconds(600)));
+    assertError(() -> service.confirmPasswordReset(EMAIL, "111111"), ErrorCode.VERIFICATION_CODE_INVALID);
+    assertError(() -> service.confirm(EMAIL, "222222"), ErrorCode.VERIFICATION_CODE_INVALID);
+    service.confirmPasswordReset(EMAIL, "222222");
+    assertError(() -> service.verifyForSignup(EMAIL, "111111"), ErrorCode.EMAIL_NOT_VERIFIED);
+    var verified = service.verifyForPasswordReset(EMAIL, "222222");
+    service.remove(EMAIL, verified);
+    assertThat(store.get(RESET_KEY)).as("가입용 remove는 비밀번호 찾기 항목을 지우지 않는다").isSameAs(verified);
+    service.removePasswordReset(EMAIL, verified);
+    assertThat(store.get(RESET_KEY)).isNull();
+    assertThat(store.get(EMAIL)).isNotNull();
+  }
+
+  @Test void passwordResetRequiresConfirmationWithinWindowAndKeepsFailureLimit() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    store.put(RESET_KEY, new EmailVerificationStore.Entry("123456", NOW, NOW.plusSeconds(600)));
+    assertError(() -> service.verifyForPasswordReset(EMAIL, "123456"), ErrorCode.EMAIL_NOT_VERIFIED);
+    service.confirmPasswordReset(EMAIL, "123456");
+    for (int i = 0; i < 4; i++) {
+      assertError(() -> service.verifyForPasswordReset(EMAIL, "000000"), ErrorCode.VERIFICATION_CODE_INVALID);
+    }
+    assertError(() -> service.confirmPasswordReset(EMAIL, "000000"), ErrorCode.VERIFICATION_CODE_INVALID);
+    assertThat(store.get(RESET_KEY)).isNull();
+    assertError(() -> service.confirmPasswordReset(EMAIL, "123456"), ErrorCode.VERIFICATION_NOT_FOUND);
+
+    store.put(RESET_KEY, new EmailVerificationStore.Entry("123456", NOW, NOW.plusSeconds(600)));
+    service.confirmPasswordReset(EMAIL, "123456");
+    service.setClock(Clock.fixed(NOW.plusSeconds(1801), ZoneOffset.UTC));
+    assertError(() -> service.verifyForPasswordReset(EMAIL, "123456"), ErrorCode.EMAIL_NOT_VERIFIED);
+  }
+
+  @Test void failedPasswordResetMailRemovesOnlyThatEntry() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    when(users.existsByEmail(EMAIL)).thenReturn(true);
+    doThrow(new ApiException(ErrorCode.MAIL_SEND_FAILED)).when(sender).sendPasswordReset(anyString(), anyString());
+    assertError(() -> service.sendPasswordReset(EMAIL), ErrorCode.MAIL_SEND_FAILED);
+    assertThat(store.get(RESET_KEY)).isNull();
+  }
+
   private void assertError(Runnable operation, ErrorCode code) {
     assertThatThrownBy(operation::run).isInstanceOfSatisfying(ApiException.class,
         error -> assertThat(error.getErrorCode()).isEqualTo(code));

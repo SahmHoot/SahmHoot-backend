@@ -2,6 +2,7 @@ package com.sahmhoot.auth;
 
 import com.sahmhoot.auth.dto.AuthResponse;
 import com.sahmhoot.auth.dto.LoginRequest;
+import com.sahmhoot.auth.dto.PasswordResetRequest;
 import com.sahmhoot.auth.dto.SignupRequest;
 import com.sahmhoot.auth.jwt.JwtProvider;
 import com.sahmhoot.auth.verification.EmailVerificationService;
@@ -53,6 +54,26 @@ public class AuthService {
       }
     });
     return toResponse(user);
+  }
+
+  /**
+   * 비밀번호 찾기 마지막 단계(#108). 인증을 마친 코드로 새 비밀번호를 저장하고, 커밋 뒤 인증 항목을 지워 같은 코드를 다시
+   * 쓰지 못하게 한다. 가입되지 않은 이메일은 인증 단계를 통과할 수 없어 여기까지 오지 않는다.
+   */
+  @Transactional
+  public void resetPassword(PasswordResetRequest req) {
+    String email = EmailVerificationService.normalize(req.email());
+    var verification = verificationService.verifyForPasswordReset(email, req.code());
+    User user =
+        userRepository
+            .findByEmail(email)
+            .orElseThrow(() -> new ApiException(ErrorCode.EMAIL_NOT_VERIFIED));
+    user.changePassword(passwordEncoder.encode(req.newPassword()));
+    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+      @Override public void afterCommit() {
+        verificationService.removePasswordReset(email, verification);
+      }
+    });
   }
 
   @Transactional(readOnly = true)
