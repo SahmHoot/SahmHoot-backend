@@ -198,6 +198,32 @@ class EmailVerificationServiceTest {
     assertThat(store.get(RESET_KEY)).isNotSameAs(reserved);
   }
 
+  @Test void wrongCodesAgainstAReservedResetDoNotCountOrRemoveIt() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    store.put(RESET_KEY, new EmailVerificationStore.Entry("123456", NOW, NOW.plusSeconds(600)));
+    service.confirmPasswordReset(EMAIL, "123456");
+    var reserved = service.reservePasswordReset(EMAIL, "123456");
+    for (int i = 0; i < 6; i++) {
+      assertError(() -> service.confirmPasswordReset(EMAIL, "000000"), ErrorCode.EMAIL_NOT_VERIFIED);
+      assertError(() -> service.reservePasswordReset(EMAIL, "000000"), ErrorCode.EMAIL_NOT_VERIFIED);
+    }
+    assertThat(store.get(RESET_KEY)).isSameAs(reserved);
+    assertThat(reserved.failCount).isZero();
+    service.releasePasswordReset(reserved);
+    assertThat(service.reservePasswordReset(EMAIL, "123456")).isSameAs(reserved);
+  }
+
+  @Test void confirmingAgainAfterTheWindowReportsExpiry() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    store.put(RESET_KEY, new EmailVerificationStore.Entry("123456", NOW, NOW.plusSeconds(600)));
+    service.confirmPasswordReset(EMAIL, "123456");
+    service.setClock(Clock.fixed(NOW.plusSeconds(1801), ZoneOffset.UTC));
+    assertError(() -> service.confirmPasswordReset(EMAIL, "123456"), ErrorCode.VERIFICATION_CODE_EXPIRED);
+    store.put(EMAIL, new EmailVerificationStore.Entry("654321", NOW, NOW.plusSeconds(600)));
+    store.get(EMAIL).verifiedAt = NOW;
+    assertError(() -> service.confirm(EMAIL, "654321"), ErrorCode.VERIFICATION_CODE_EXPIRED);
+  }
+
   @Test void expiredEntriesAreSweptWhenANewCodeIsIssued() {
     service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
     var expired = new EmailVerificationStore.Entry("111111", NOW.minusSeconds(700), NOW.minusSeconds(100));

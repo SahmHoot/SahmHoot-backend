@@ -200,4 +200,25 @@ class AuthFlowTest {
         .andExpect(status().isBadRequest())
         .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
   }
+
+  @Test
+  void 바이트_수가_BCrypt_한도를_넘는_비밀번호는_400() throws Exception {
+    // 20글자라 글자 수 규칙은 통과하지만 UTF-8로 74바이트다. 인코더까지 가면 500이 된다.
+    String tooLong = "a1" + "\uD83D\uDE00".repeat(18);
+    assertThat(tooLong.getBytes(java.nio.charset.StandardCharsets.UTF_8).length).isEqualTo(74);
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> passwordEncoder.encode(tooLong))
+        .as("BCrypt가 72바이트 초과를 거부하는지(이 검증이 필요한 이유)")
+        .isInstanceOf(IllegalArgumentException.class);
+    postJson(
+            "/api/auth/password-reset",
+            "{\"email\":\"" + RESET_EMAIL + "\",\"code\":\"123456\",\"newPassword\":\"" + tooLong + "\"}")
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    postJson(
+            "/api/auth/signup",
+            "{\"email\":\"flow@test.ac.kr\",\"code\":\"123456\",\"password\":\"" + tooLong
+                + "\",\"name\":\"홍길동\",\"role\":\"STUDENT\"}")
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+  }
 }

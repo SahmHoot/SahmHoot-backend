@@ -151,8 +151,15 @@ public class EmailVerificationService {
     if (entry == null) {
       throw new ApiException(ErrorCode.VERIFICATION_NOT_FOUND);
     }
+    // 비밀번호 변경이 이 코드를 쓰는 중이면 오답으로 항목이 지워지지 않게 시도 자체를 받지 않는다(#108).
+    if (entry.reserved) {
+      throw new ApiException(ErrorCode.EMAIL_NOT_VERIFIED);
+    }
     Instant now = clock.instant();
-    if (entry.verifiedAt == null && now.isAfter(entry.expiresAt)) {
+    // 확인 전에는 코드 10분, 확인 뒤에는 가입·변경 가능 시간 30분이 지나면 만료다. 지난 확인을 다시 성공으로 답하지 않는다.
+    if (entry.verifiedAt == null
+        ? now.isAfter(entry.expiresAt)
+        : now.isAfter(entry.verifiedAt.plus(SIGNUP_WINDOW))) {
       throw new ApiException(ErrorCode.VERIFICATION_CODE_EXPIRED);
     }
     checkCode(key, entry, code);
@@ -172,9 +179,6 @@ public class EmailVerificationService {
    */
   public synchronized Entry reservePasswordReset(String rawEmail, String code) {
     Entry entry = verifyKey(passwordResetKey(normalize(rawEmail)), code);
-    if (entry.reserved) {
-      throw new ApiException(ErrorCode.EMAIL_NOT_VERIFIED);
-    }
     entry.reserved = true;
     return entry;
   }
@@ -188,7 +192,9 @@ public class EmailVerificationService {
     if (entry == null) {
       throw new ApiException(ErrorCode.EMAIL_NOT_VERIFIED);
     }
-    if (entry.verifiedAt == null
+    // 예약된 항목(다른 변경 진행 중)은 코드를 비교하지 않고 거부해 실패 횟수로 지워지지 않게 한다(#108).
+    if (entry.reserved
+        || entry.verifiedAt == null
         || clock.instant().isAfter(entry.verifiedAt.plus(SIGNUP_WINDOW))) {
       throw new ApiException(ErrorCode.EMAIL_NOT_VERIFIED);
     }
