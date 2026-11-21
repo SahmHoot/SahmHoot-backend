@@ -101,7 +101,8 @@ public class EmailVerificationService {
       Instant now = clock.instant();
       sweep(now);
       Entry prev = store.get(key);
-      if (prev != null && prev.sentAt.plus(RESEND_INTERVAL).isAfter(now)) {
+      // 비밀번호 변경 트랜잭션이 쓰는 중인 항목은 바꾸지 않는다. 바꾸면 새 코드로 두 번째 변경이 동시에 진행될 수 있다.
+      if (prev != null && (prev.reserved || prev.sentAt.plus(RESEND_INTERVAL).isAfter(now))) {
         throw new ApiException(ErrorCode.VERIFICATION_TOO_FREQUENT);
       }
       Entry current = new Entry(code, now, now.plus(CODE_TTL));
@@ -119,9 +120,9 @@ public class EmailVerificationService {
       return;
     }
     lastSweep = now;
-    store.removeIf(entry -> entry.verifiedAt == null
+    store.removeIf(entry -> !entry.reserved && (entry.verifiedAt == null
         ? now.isAfter(entry.expiresAt)
-        : now.isAfter(entry.verifiedAt.plus(SIGNUP_WINDOW)));
+        : now.isAfter(entry.verifiedAt.plus(SIGNUP_WINDOW))));
   }
 
   /** SMTP 발송은 잠금 밖에서 한다. 실패하면 이번에 만든 항목만 지운다. */

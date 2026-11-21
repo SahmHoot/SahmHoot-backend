@@ -183,6 +183,21 @@ class EmailVerificationServiceTest {
     assertThat(service.reservePasswordReset(EMAIL, "123456")).isSameAs(reserved);
   }
 
+  @Test void reservedPasswordResetIsNeitherReplacedNorSwept() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    store.put(RESET_KEY, new EmailVerificationStore.Entry("123456", NOW, NOW.plusSeconds(600)));
+    service.confirmPasswordReset(EMAIL, "123456");
+    var reserved = service.reservePasswordReset(EMAIL, "123456");
+    service.setClock(Clock.fixed(NOW.plusSeconds(4000), ZoneOffset.UTC));
+    assertError(() -> service.sendPasswordReset(EMAIL), ErrorCode.VERIFICATION_TOO_FREQUENT);
+    service.setClock(Clock.fixed(NOW.plusSeconds(4000), ZoneOffset.UTC));
+    service.sendPasswordReset("other@test.invalid");
+    assertThat(store.get(RESET_KEY)).as("변경 중인 항목은 재발송·정리로 사라지지 않는다").isSameAs(reserved);
+    service.releasePasswordReset(reserved);
+    service.sendPasswordReset(EMAIL);
+    assertThat(store.get(RESET_KEY)).isNotSameAs(reserved);
+  }
+
   @Test void expiredEntriesAreSweptWhenANewCodeIsIssued() {
     service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
     var expired = new EmailVerificationStore.Entry("111111", NOW.minusSeconds(700), NOW.minusSeconds(100));
