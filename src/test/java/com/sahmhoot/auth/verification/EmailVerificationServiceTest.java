@@ -111,17 +111,17 @@ class EmailVerificationServiceTest {
     assertError(() -> service.confirm(EMAIL, "123456"), ErrorCode.VERIFICATION_NOT_FOUND);
   }
 
-  @Test void resendReplacesVerificationAndRespectsSixtySeconds() {
+  @Test void resendReplacesVerificationAndRespectsThirtySeconds() {
     service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
     var original = new EmailVerificationStore.Entry("123456", NOW, NOW.plusSeconds(600));
     store.put(EMAIL, original);
-    service.setClock(Clock.fixed(NOW.plusSeconds(59), ZoneOffset.UTC));
+    service.setClock(Clock.fixed(NOW.plusSeconds(29), ZoneOffset.UTC));
     assertError(() -> service.send(EMAIL), ErrorCode.VERIFICATION_TOO_FREQUENT);
     assertThat(store.get(EMAIL)).isSameAs(original);
-    service.setClock(Clock.fixed(NOW.plusSeconds(60), ZoneOffset.UTC));
+    service.setClock(Clock.fixed(NOW.plusSeconds(30), ZoneOffset.UTC));
     service.send(EMAIL);
     assertThat(store.get(EMAIL)).isNotSameAs(original);
-    assertThat(store.get(EMAIL).sentAt).isEqualTo(NOW.plusSeconds(60));
+    assertThat(store.get(EMAIL).sentAt).isEqualTo(NOW.plusSeconds(30));
     assertThat(store.get(EMAIL).verifiedAt).isNull();
   }
 

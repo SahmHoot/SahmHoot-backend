@@ -108,7 +108,7 @@ class AuthFlowTest {
   }
 
   @Test
-  void 인증_코드는_60초에_한_번() throws Exception {
+  void 인증_코드는_30초에_한_번() throws Exception {
     String body = "{\"email\":\"again@test.ac.kr\"}";
     postJson("/api/auth/email-verifications", body).andExpect(status().isNoContent());
     postJson("/api/auth/email-verifications", body)
