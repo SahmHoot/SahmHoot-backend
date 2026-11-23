@@ -37,6 +37,15 @@ public class VerificationMailSender {
   }
 
   public void send(String email, String code) {
+    send(email, code, "[SahmHoot!] 이메일 인증번호 발송", "");
+  }
+
+  /** 비밀번호 찾기 인증 코드(#108). 본문 형식은 가입 인증 메일과 같고 제목·안내 문장만 다르다. */
+  public void sendPasswordReset(String email, String code) {
+    send(email, code, "[SahmHoot!] 비밀번호 재설정 인증번호", "비밀번호 재설정 요청을 받았습니다.\n");
+  }
+
+  private void send(String email, String code, String subject, String intro) {
     JavaMailSender sender = mailSender.getIfAvailable();
     if (!StringUtils.hasText(host) || sender == null || !StringUtils.hasText(from)) {
       throw new ApiException(ErrorCode.MAIL_SEND_FAILED);
@@ -46,11 +55,12 @@ public class VerificationMailSender {
       var helper = new MimeMessageHelper(message, true, StandardCharsets.UTF_8.name());
       helper.setFrom(from, "SahmHoot");
       helper.setTo(email);
-      helper.setSubject("[SahmHoot!] 이메일 인증번호 발송");
-      String plainText = "SahmHoot!\n수업 중 실시간 참여형 플랫폼\n\n인증번호: " + code
+      helper.setSubject(subject);
+      String plainText = "SahmHoot!\n수업 중 실시간 참여형 플랫폼\n\n" + intro + "인증번호: " + code
           + "\n\n인증번호는 10분 동안 유효합니다.\n본인이 요청하지 않았다면 이 메일을 무시해 주세요.";
       String html = new ClassPathResource("mail/verification-email.html").getContentAsString(StandardCharsets.UTF_8)
-          .replace("{{verificationCode}}", HtmlUtils.htmlEscape(code));
+          .replace("{{verificationCode}}", HtmlUtils.htmlEscape(code))
+          .replace("[SahmHoot!] 이메일 인증번호 발송", HtmlUtils.htmlEscape(subject));
       helper.setText(plainText, html);
       sender.send(message);
     } catch (MailException | MessagingException | IOException e) {

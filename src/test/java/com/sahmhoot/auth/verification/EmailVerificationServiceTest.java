@@ -5,11 +5,14 @@ import static org.mockito.Mockito.*;
 
 import com.sahmhoot.auth.exception.ApiException;
 import com.sahmhoot.auth.exception.ErrorCode;
+import com.sahmhoot.user.Role;
+import com.sahmhoot.user.User;
 import com.sahmhoot.user.UserRepository;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -133,6 +136,165 @@ class EmailVerificationServiceTest {
     service.confirm(EMAIL, "123456");
     service.setClock(Clock.fixed(NOW.plusSeconds(1802), ZoneOffset.UTC));
     assertError(() -> service.verifyForSignup(EMAIL, "123456"), ErrorCode.EMAIL_NOT_VERIFIED);
+  }
+
+  private static final String RESET_KEY = EmailVerificationService.passwordResetKey(EMAIL);
+
+  @Test void passwordResetMailsOnlyRegisteredEmailButAnswersTheSame() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    registered(EMAIL);
+    service.sendPasswordReset(" Member@Test.Invalid ");
+    verify(sender).sendPasswordReset(eq(EMAIL), eq(store.get(RESET_KEY).code()));
+
+    String unknown = "nobody@test.invalid";
+    service.sendPasswordReset(unknown);
+    verify(sender, never()).sendPasswordReset(eq(unknown), anyString());
+    verify(sender, never()).send(anyString(), anyString());
+    assertThat(store.get(EmailVerificationService.passwordResetKey(unknown)))
+        .as("가입되지 않은 이메일도 재발송 간격 검사를 같게 받도록 항목을 만든다").isNotNull();
+    assertError(() -> service.sendPasswordReset(unknown), ErrorCode.VERIFICATION_TOO_FREQUENT);
+    assertError(() -> service.sendPasswordReset(EMAIL), ErrorCode.VERIFICATION_TOO_FREQUENT);
+  }
+
+  @Test void passwordResetMailGoesOnlyToTheExactStoredAddress() {
+    // DB 정렬 규칙이 다른 주소를 같은 계정으로 찾아 준 경우
+    String lookalike = "mémber@test.invalid";
+    when(users.findByEmail(lookalike)).thenReturn(Optional.of(User.create(EMAIL, "hash", "회원", null, Role.STUDENT)));
+    service.sendPasswordReset(lookalike);
+    verifyNoInteractions(sender);
+  }
+
+  @Test void failedPasswordResetMailAnswersTheSameAndKeepsResendInterval() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    registered(EMAIL);
+    doThrow(new ApiException(ErrorCode.MAIL_SEND_FAILED)).when(sender).sendPasswordReset(anyString(), anyString());
+    service.sendPasswordReset(EMAIL);
+    assertThat(store.get(RESET_KEY)).isNotNull();
+    assertError(() -> service.sendPasswordReset(EMAIL), ErrorCode.VERIFICATION_TOO_FREQUENT);
+  }
+
+  @Test void reservedPasswordResetCannotBeUsedTwiceUntilReleased() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    store.put(RESET_KEY, new EmailVerificationStore.Entry("123456", NOW, NOW.plusSeconds(600)));
+    service.confirmPasswordReset(EMAIL, "123456");
+    var reserved = service.reservePasswordReset(EMAIL, "123456");
+    assertError(() -> service.reservePasswordReset(EMAIL, "123456"), ErrorCode.EMAIL_NOT_VERIFIED);
+    service.releasePasswordReset(reserved);
+    assertThat(service.reservePasswordReset(EMAIL, "123456")).isSameAs(reserved);
+  }
+
+  @Test void reservedPasswordResetIsNeitherReplacedNorSwept() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    store.put(RESET_KEY, new EmailVerificationStore.Entry("123456", NOW, NOW.plusSeconds(600)));
+    service.confirmPasswordReset(EMAIL, "123456");
+    var reserved = service.reservePasswordReset(EMAIL, "123456");
+    service.setClock(Clock.fixed(NOW.plusSeconds(4000), ZoneOffset.UTC));
+    assertError(() -> service.sendPasswordReset(EMAIL), ErrorCode.VERIFICATION_TOO_FREQUENT);
+    service.setClock(Clock.fixed(NOW.plusSeconds(4000), ZoneOffset.UTC));
+    service.sendPasswordReset("other@test.invalid");
+    assertThat(store.get(RESET_KEY)).as("변경 중인 항목은 재발송·정리로 사라지지 않는다").isSameAs(reserved);
+    service.releasePasswordReset(reserved);
+    service.sendPasswordReset(EMAIL);
+    assertThat(store.get(RESET_KEY)).isNotSameAs(reserved);
+  }
+
+  @Test void wrongCodesAgainstAReservedResetDoNotCountOrRemoveIt() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    store.put(RESET_KEY, new EmailVerificationStore.Entry("123456", NOW, NOW.plusSeconds(600)));
+    service.confirmPasswordReset(EMAIL, "123456");
+    var reserved = service.reservePasswordReset(EMAIL, "123456");
+    for (int i = 0; i < 6; i++) {
+      assertError(() -> service.confirmPasswordReset(EMAIL, "000000"), ErrorCode.EMAIL_NOT_VERIFIED);
+      assertError(() -> service.reservePasswordReset(EMAIL, "000000"), ErrorCode.EMAIL_NOT_VERIFIED);
+    }
+    assertThat(store.get(RESET_KEY)).isSameAs(reserved);
+    assertThat(reserved.failCount).isZero();
+    service.releasePasswordReset(reserved);
+    assertThat(service.reservePasswordReset(EMAIL, "123456")).isSameAs(reserved);
+  }
+
+  @Test void confirmingAgainAfterTheWindowReportsExpiry() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    store.put(RESET_KEY, new EmailVerificationStore.Entry("123456", NOW, NOW.plusSeconds(600)));
+    service.confirmPasswordReset(EMAIL, "123456");
+    service.setClock(Clock.fixed(NOW.plusSeconds(1801), ZoneOffset.UTC));
+    assertError(() -> service.confirmPasswordReset(EMAIL, "123456"), ErrorCode.VERIFICATION_CODE_EXPIRED);
+    store.put(EMAIL, new EmailVerificationStore.Entry("654321", NOW, NOW.plusSeconds(600)));
+    store.get(EMAIL).verifiedAt = NOW;
+    assertError(() -> service.confirm(EMAIL, "654321"), ErrorCode.VERIFICATION_CODE_EXPIRED);
+  }
+
+  @Test void expiredEntriesAreSweptWhenANewCodeIsIssued() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    var expired = new EmailVerificationStore.Entry("111111", NOW.minusSeconds(700), NOW.minusSeconds(100));
+    var verifiedLongAgo = new EmailVerificationStore.Entry("222222", NOW.minusSeconds(4000), NOW.minusSeconds(3400));
+    verifiedLongAgo.verifiedAt = NOW.minusSeconds(1801);
+    var live = new EmailVerificationStore.Entry("333333", NOW.minusSeconds(100), NOW.plusSeconds(500));
+    var verifiedRecently = new EmailVerificationStore.Entry("444444", NOW.minusSeconds(900), NOW.minusSeconds(300));
+    verifiedRecently.verifiedAt = NOW.minusSeconds(600);
+    store.put("a@test.invalid", expired);
+    store.put("b@test.invalid", verifiedLongAgo);
+    store.put("c@test.invalid", live);
+    store.put("d@test.invalid", verifiedRecently);
+    service.sendPasswordReset("new@test.invalid");
+    assertThat(store.get("a@test.invalid")).isNull();
+    assertThat(store.get("b@test.invalid")).isNull();
+    assertThat(store.get("c@test.invalid")).isSameAs(live);
+    assertThat(store.get("d@test.invalid")).isSameAs(verifiedRecently);
+
+    var laterExpired = new EmailVerificationStore.Entry("555555", NOW.minusSeconds(700), NOW.minusSeconds(1));
+    store.put("e@test.invalid", laterExpired);
+    service.setClock(Clock.fixed(NOW.plusSeconds(59), ZoneOffset.UTC));
+    service.sendPasswordReset("new2@test.invalid");
+    assertThat(store.get("e@test.invalid")).as("1분 안에는 다시 훑지 않는다").isSameAs(laterExpired);
+    service.setClock(Clock.fixed(NOW.plusSeconds(60), ZoneOffset.UTC));
+    service.sendPasswordReset("new3@test.invalid");
+    assertThat(store.get("e@test.invalid")).isNull();
+  }
+
+  private void registered(String email) {
+    when(users.findByEmail(email)).thenReturn(Optional.of(User.create(email, "hash", "회원", null, Role.STUDENT)));
+  }
+
+  @Test void passwordResetDoesNotRejectRegisteredOrDisallowedDomain() {
+    var restricted = new EmailVerificationService(store, sender, users, "allowed.invalid");
+    registered(EMAIL);
+    restricted.sendPasswordReset(EMAIL);
+    verify(sender).sendPasswordReset(eq(EMAIL), matches("[0-9]{6}"));
+  }
+
+  @Test void signupAndPasswordResetCodesAreSeparate() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    store.put(EMAIL, new EmailVerificationStore.Entry("111111", NOW, NOW.plusSeconds(600)));
+    store.put(RESET_KEY, new EmailVerificationStore.Entry("222222", NOW, NOW.plusSeconds(600)));
+    assertError(() -> service.confirmPasswordReset(EMAIL, "111111"), ErrorCode.VERIFICATION_CODE_INVALID);
+    assertError(() -> service.confirm(EMAIL, "222222"), ErrorCode.VERIFICATION_CODE_INVALID);
+    service.confirmPasswordReset(EMAIL, "222222");
+    assertError(() -> service.verifyForSignup(EMAIL, "111111"), ErrorCode.EMAIL_NOT_VERIFIED);
+    var verified = service.reservePasswordReset(EMAIL, "222222");
+    service.remove(EMAIL, verified);
+    assertThat(store.get(RESET_KEY)).as("가입용 remove는 비밀번호 찾기 항목을 지우지 않는다").isSameAs(verified);
+    service.removePasswordReset(EMAIL, verified);
+    assertThat(store.get(RESET_KEY)).isNull();
+    assertThat(store.get(EMAIL)).isNotNull();
+  }
+
+  @Test void passwordResetRequiresConfirmationWithinWindowAndKeepsFailureLimit() {
+    service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+    store.put(RESET_KEY, new EmailVerificationStore.Entry("123456", NOW, NOW.plusSeconds(600)));
+    assertError(() -> service.reservePasswordReset(EMAIL, "123456"), ErrorCode.EMAIL_NOT_VERIFIED);
+    service.confirmPasswordReset(EMAIL, "123456");
+    for (int i = 0; i < 4; i++) {
+      assertError(() -> service.reservePasswordReset(EMAIL, "000000"), ErrorCode.VERIFICATION_CODE_INVALID);
+    }
+    assertError(() -> service.confirmPasswordReset(EMAIL, "000000"), ErrorCode.VERIFICATION_CODE_INVALID);
+    assertThat(store.get(RESET_KEY)).isNull();
+    assertError(() -> service.confirmPasswordReset(EMAIL, "123456"), ErrorCode.VERIFICATION_NOT_FOUND);
+
+    store.put(RESET_KEY, new EmailVerificationStore.Entry("123456", NOW, NOW.plusSeconds(600)));
+    service.confirmPasswordReset(EMAIL, "123456");
+    service.setClock(Clock.fixed(NOW.plusSeconds(1801), ZoneOffset.UTC));
+    assertError(() -> service.reservePasswordReset(EMAIL, "123456"), ErrorCode.EMAIL_NOT_VERIFIED);
   }
 
   private void assertError(Runnable operation, ErrorCode code) {
