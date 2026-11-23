@@ -30,6 +30,8 @@ import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -95,13 +97,52 @@ class ChatModerationServiceTest {
     stubParticipant();
     when(authors.findEmail(STUDENT)).thenReturn(Optional.of("student@example.test"));
 
-    assertThat(moderation.author(ROOM, OWNER, MESSAGE)).isEqualTo(new ChatAuthorResponse(PARTICIPANT, "익명", "student@example.test"));
+    assertThat(moderation.author(ROOM, OWNER, MESSAGE)).isEqualTo(new ChatAuthorResponse(PARTICIPANT, "익명", "stu***@example.test"));
     error(ChatErrorCode.ROOM_CLOSED, () -> moderation.updateRestriction(ROOM, OWNER, PARTICIPANT, true));
     error(ChatErrorCode.ROOM_CLOSED, () -> moderation.updateRestriction(ROOM, OWNER, PARTICIPANT, false));
     error(ChatErrorCode.ROOM_CLOSED, () -> moderation.delete(ROOM, OWNER, MESSAGE));
     error(ChatErrorCode.ROOM_CLOSED, () -> moderation.pin(ROOM, OWNER, MESSAGE));
     error(ChatErrorCode.ROOM_CLOSED, () -> moderation.unpin(ROOM, OWNER, MESSAGE));
     verifyNoInteractions(pins, restrictions, events);
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "student123@syu.ac.kr, stu***@syu.ac.kr",
+      "abcdef@gmail.com, abc***@gmail.com",
+      "kim@naver.com, ki***@naver.com",
+      "ab@syu.ac.kr, a***@syu.ac.kr",
+      "a@syu.ac.kr, ***@syu.ac.kr",
+      "학생메일@Example.TEST, 학생메***@Example.TEST",
+      "abc***@example.test, ab***@example.test",
+      "abcd@example.test, abc***@example.test",
+      "***@example.test, *****@example.test",
+      "'', ***",
+      "'   ', ***",
+      "invalid-email, ***",
+      "@example.test, ***",
+      "student@, ***",
+      "one@two@example.test, ***",
+      "student@example..test, ***",
+      "a..b@example.test, ***",
+      "student@-example.test, ***",
+      "'student @example.test', ***"
+  })
+  void authorOnlyReturnsMaskedEmail(String email, String maskedEmail) {
+    when(messages.findByIdAndRoomId(MESSAGE, ROOM)).thenReturn(Optional.of(message()));
+    stubParticipant();
+    when(authors.findEmail(STUDENT)).thenReturn(Optional.of(email));
+
+    assertThat(moderation.author(ROOM, OWNER, MESSAGE))
+        .isEqualTo(new ChatAuthorResponse(PARTICIPANT, "익명", maskedEmail));
+  }
+
+  @Test void missingAccountEmailReturnsTheExistingInternalError() {
+    when(messages.findByIdAndRoomId(MESSAGE, ROOM)).thenReturn(Optional.of(message()));
+    stubParticipant();
+    when(authors.findEmail(STUDENT)).thenReturn(Optional.ofNullable(null));
+
+    error(ChatErrorCode.INTERNAL_ERROR, () -> moderation.author(ROOM, OWNER, MESSAGE));
   }
 
   @Test void restrictionEventsAreRegisteredOnlyForActualChanges() {

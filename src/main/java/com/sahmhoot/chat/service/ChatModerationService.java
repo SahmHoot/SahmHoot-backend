@@ -25,6 +25,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Set;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -34,6 +35,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class ChatModerationService {
+  private static final String EMAIL_MASK = "***";
+  private static final String EMAIL_ATOM = "[\\p{L}\\p{M}\\p{N}!#$%&'*+/=?^_`{|}~-]+";
+  private static final String DOMAIN_LABEL = "[\\p{L}\\p{N}](?:[\\p{L}\\p{M}\\p{N}-]*[\\p{L}\\p{M}\\p{N}])?";
+  private static final Pattern ACCOUNT_EMAIL =
+      Pattern.compile(EMAIL_ATOM + "(?:\\." + EMAIL_ATOM + ")*@" + DOMAIN_LABEL + "(?:\\." + DOMAIN_LABEL + ")*");
+
   private final RoomLockPort locks;
   private final ChatRoomPort rooms;
   private final ChatAuthorEmailPort authors;
@@ -65,9 +72,23 @@ public class ChatModerationService {
     var sender = rooms.findParticipants(roomId, Set.of(message.getSenderParticipantId()))
         .get(message.getSenderParticipantId());
     if (sender == null) throw new ChatException(ChatErrorCode.INTERNAL_ERROR);
-    var email = authors.findEmail(sender.userId())
+    var maskedEmail = authors.findEmail(sender.userId())
+        .map(ChatModerationService::maskEmail)
         .orElseThrow(() -> new ChatException(ChatErrorCode.INTERNAL_ERROR));
-    return new ChatAuthorResponse(sender.id(), sender.nickname(), email);
+    return new ChatAuthorResponse(sender.id(), sender.nickname(), maskedEmail);
+  }
+
+  private static String maskEmail(String email) {
+    if (!ACCOUNT_EMAIL.matcher(email).matches()) return EMAIL_MASK;
+
+    int at = email.indexOf('@');
+    int visible = Math.min(3, email.codePointCount(0, at) - 1);
+    int prefixEnd = email.offsetByCodePoints(0, visible);
+    // An address whose hidden part is already "***" must still change in the response.
+    if (email.substring(prefixEnd, at).equals(EMAIL_MASK)) {
+      prefixEnd = email.offsetByCodePoints(0, visible - 1);
+    }
+    return email.substring(0, prefixEnd) + EMAIL_MASK + email.substring(at);
   }
 
   public ChatRestrictionResponse updateRestriction(Long roomId, Long ownerId, Long participantId, boolean blocked) {
