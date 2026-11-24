@@ -225,9 +225,9 @@ class RoomStateServiceTest {
   static RoomQuizStatePort.Snapshot snapshot(Phase phase) {
     var question = new CurrentQuestion(812L, 3, "MULTIPLE_CHOICE", 15, "현재 문항",
         List.of(new Choice(3001L, 1, "선택지")), NOW.minusSeconds(10), NOW.plusSeconds(5),
-        phase == Phase.QUESTION ? null : NOW, 3001L);
+        phase == Phase.QUESTION ? null : NOW, 3001L, null);
     var result = new Result(List.of(new QuestionResult(812L, 3, "현재 문항", 3001L, 2, 1, 1,
-        List.of(new ChoiceResult(3001L, 1, "선택지", 1)))));
+        List.of(new ChoiceResult(3001L, 1, "선택지", 1)), null)));
     return new RoomQuizStatePort.Snapshot(new QuizRun(phase == Phase.RESULT ? RunStatus.FINISHED : RunStatus.RUNNING),
         new Quiz(77L, "문제집", 5, phase, question, NOW.plusSeconds(3),
             List.of(new MyAnswer(812L, 3001L)), result), new Progress(812L, 2));

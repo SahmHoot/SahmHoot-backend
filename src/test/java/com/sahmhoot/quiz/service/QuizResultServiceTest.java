@@ -37,6 +37,9 @@ class QuizResultServiceTest {
   @Mock
   private AnswerRepository answerRepository;
 
+  @Mock
+  private RunQuestionImageService images;
+
   @InjectMocks
   private QuizResultService quizResultService;
 
@@ -83,6 +86,7 @@ class QuizResultServiceTest {
     given(runChoiceRepository.findByQuizRunIdWithRunQuestion(runId)).willReturn(List.of(c1, c2));
     given(answerRepository.findByQuizRunIdWithRunChoice(runId)).willReturn(List.of(a1, a2, a3));
 
+    given(images.resultImages(42L, runId)).willReturn(id -> null);
     QuizResultResponse response = quizResultService.aggregateResult(runId);
 
     assertThat(response.questions()).hasSize(1);
@@ -137,6 +141,7 @@ class QuizResultServiceTest {
     given(runChoiceRepository.findByQuizRunIdWithRunQuestion(runId)).willReturn(List.of(c1, c2));
     given(answerRepository.findByQuizRunIdWithRunChoice(runId)).willReturn(List.of());
 
+    given(images.resultImages(42L, runId)).willReturn(id -> null);
     QuizResultResponse response = quizResultService.aggregateResult(runId);
 
     assertThat(response.questions()).hasSize(2);
@@ -176,6 +181,7 @@ class QuizResultServiceTest {
     given(runChoiceRepository.findByQuizRunIdWithRunQuestion(runId)).willReturn(List.of(c1));
     given(answerRepository.findByQuizRunIdWithRunChoice(runId)).willReturn(List.of());
 
+    given(images.resultImages(42L, runId)).willReturn(id -> null);
     QuizResultResponse response = quizResultService.aggregateResult(runId);
 
     assertThat(response.questions()).hasSize(1);

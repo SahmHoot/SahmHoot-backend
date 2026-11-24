@@ -1,5 +1,6 @@
 package com.sahmhoot.room.dto;
 
+import com.sahmhoot.questionimage.dto.RunQuestionImage;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.sahmhoot.room.entity.RoomStatus;
 import java.time.Instant;
@@ -30,7 +31,8 @@ public record RoomStateResponse(
 
   public record CurrentQuestion(Long runQuestionId, int questionNo, String questionType,
       int timeLimitSeconds, String content, List<Choice> choices, Instant openedAt,
-      Instant closesAt, Instant closedAt, Long correctChoiceId) {}
+      Instant closesAt, Instant closedAt, Long correctChoiceId,
+      @JsonInclude(value = JsonInclude.Include.CUSTOM, valueFilter = RunQuestionImage.DisabledFilter.class) RunQuestionImage image) {}
 
   public record Choice(Long id, int orderNo, String content) {}
 
@@ -45,7 +47,8 @@ public record RoomStateResponse(
 
   public record QuestionResult(Long runQuestionId, int questionNo, String content,
       Long correctChoiceId, int answeredCount, int correctCount, int incorrectCount,
-      List<ChoiceResult> choices) {
+      List<ChoiceResult> choices,
+      @JsonInclude(value = JsonInclude.Include.CUSTOM, valueFilter = RunQuestionImage.DisabledFilter.class) RunQuestionImage image) {
     public QuestionResult { choices = List.copyOf(choices); }
   }
 

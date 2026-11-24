@@ -155,7 +155,7 @@ class QuizCoreTransactionIntegrationTest {
           roomPort,
           questionSetPort,
           eventPublisher,
-          clock
+          clock, mock(RunQuestionImageService.class)
       );
     }
 
