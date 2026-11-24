@@ -27,15 +27,23 @@ public class QuestionImageValidator {
   // Bound peak decoding memory across concurrent calls on the application bean.
   public synchronized ValidatedImage validate(InputStream source, String declaredMimeType) throws IOException {
     byte[] input = source.readNBytes(MAX_BYTES + 1);
-    if (input.length < 8 || input.length > MAX_BYTES) {
+    if (input.length > MAX_BYTES) {
+      throw new InvalidImageException(InvalidImageException.Reason.TOO_LARGE);
+    }
+    if (input.length < 8) {
       throw new InvalidImageException();
     }
-    boolean png = "image/png".equalsIgnoreCase(declaredMimeType)
-        && Arrays.equals(input, 0, 8, PNG_SIGNATURE, 0, 8);
-    boolean jpeg = "image/jpeg".equalsIgnoreCase(declaredMimeType)
-        && (input[0] & 255) == 255 && (input[1] & 255) == 216
-        && (input[input.length - 2] & 255) == 255 && (input[input.length - 1] & 255) == 217;
-    if (!png && !jpeg) {
+    boolean pngMime = "image/png".equalsIgnoreCase(declaredMimeType);
+    boolean jpegMime = "image/jpeg".equalsIgnoreCase(declaredMimeType);
+    if (!pngMime && !jpegMime) {
+      throw new InvalidImageException(InvalidImageException.Reason.UNSUPPORTED);
+    }
+    boolean png = Arrays.equals(input, 0, 8, PNG_SIGNATURE, 0, 8);
+    boolean jpeg = (input[0] & 255) == 255 && (input[1] & 255) == 216;
+    if (png != pngMime || jpeg != jpegMime) {
+      throw new InvalidImageException(InvalidImageException.Reason.UNSUPPORTED);
+    }
+    if (jpeg && ((input[input.length - 2] & 255) != 255 || (input[input.length - 1] & 255) != 217)) {
       throw new InvalidImageException();
     }
     byte[] sanitized = png ? sanitizePng(input) : input;
@@ -49,7 +57,7 @@ public class QuestionImageValidator {
       int width = reader.getWidth(0);
       int height = reader.getHeight(0);
       if (width <= 0 || height <= 0 || width > 4096 || height > 4096 || (long) width * height > 16_000_000) {
-        throw new InvalidImageException();
+        throw new InvalidImageException(InvalidImageException.Reason.DIMENSIONS);
       }
       BufferedImage decoded = reader.read(0);
       // A fresh raster drops input metadata and normalizes JPEG color types.
@@ -131,7 +139,7 @@ public class QuestionImageValidator {
 
     private void checkCapacity(int length) throws IOException {
       if (length > MAX_BYTES - bytes.size()) {
-        throw new IOException("Encoded question image exceeds size limit");
+        throw new InvalidImageException(InvalidImageException.Reason.TOO_LARGE);
       }
     }
   }

@@ -58,13 +58,15 @@ public class JdbcQuestionImageLifecycleRepository implements QuestionImageLifecy
   @Override
   public boolean finishUpload(UUID key, Instant now, BooleanSupplier write) {
     return independent.execute(transaction -> {
-      if (!lock(key, "status = 'UPLOADING' AND question_set_id IS NOT NULL AND expires_at > ?", timestamp(now))) {
+      if (!lock(key, "status = 'UPLOADING' AND question_set_id IS NOT NULL AND expires_at > ?", timestamp(now))
+          || !uploadStillAuthorized(key)) {
         return false;
       }
       if (!write.getAsBoolean()) {
         jdbc.update("DELETE FROM question_images WHERE image_key = ?", key.toString());
         return false;
       }
+      if (!uploadStillAuthorized(key)) return false;
       jdbc.update("UPDATE question_images SET status = 'AVAILABLE' WHERE image_key = ?", key.toString());
       return true;
     });
@@ -110,6 +112,15 @@ public class JdbcQuestionImageLifecycleRepository implements QuestionImageLifecy
             uploaderId, setId, timestamp(now))
         && jdbc.update("UPDATE questions SET image_key = ? WHERE id = ? AND question_set_id = ?",
             key.toString(), questionId, setId) == 1);
+  }
+
+  private boolean uploadStillAuthorized(UUID key) {
+    return !jdbc.queryForList("""
+        SELECT 1 FROM question_images i
+        JOIN question_sets s ON s.id = i.question_set_id AND s.host_id = i.uploader_id
+        JOIN users u ON u.id = i.uploader_id AND u.role = 'PROFESSOR'
+        WHERE i.image_key = ?
+        """, Integer.class, key.toString()).isEmpty();
   }
 
   private boolean ownsSet(long userId, long setId, boolean lock) {
