@@ -27,4 +27,14 @@ public interface QuestionImageAccess {
   boolean enabled();
 
   Upload upload(long uploaderId, long setId, InputStream file, String mimeType) throws IOException;
+
+  Map<Long, Metadata> images(long setId);
+
+  Metadata image(long setId, long questionId);
+
+  byte[] read(UUID key);
+
+  void attach(UUID key, long uploaderId, long setId, long questionId);
+
+  void detach(long setId, long questionId);
 }
