@@ -4,6 +4,7 @@ import com.sahmhoot.questionimage.storage.ImageStorage;
 import com.sahmhoot.questionimage.storage.ImageStorageException;
 import org.springframework.security.access.AccessDeniedException;
 import com.sahmhoot.questionset.service.port.QuestionImageAccess;
+import com.sahmhoot.quiz.service.port.RunImageAccess;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Map;
@@ -13,7 +14,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 @Component
-class QuestionSetImageAdapter implements QuestionImageAccess {
+class QuestionSetImageAdapter implements QuestionImageAccess, RunImageAccess {
   private final ObjectProvider<QuestionImageLifecycle> lifecycle;
   private final ObjectProvider<ImageStorage> storage;
   private final JdbcTemplate jdbc;
@@ -68,6 +69,19 @@ class QuestionSetImageAdapter implements QuestionImageAccess {
         WHERE q.question_set_id = ? AND i.status = 'AVAILABLE'
         """;
     Object[] parameters = questionId == null ? new Object[] {setId} : new Object[] {setId, questionId};
+    return queryImages(sql, questionId, parameters);
+  }
+
+  @Override
+  public Map<Long, Metadata> runImages(long runId, Long questionId) {
+    return queryImages("""
+        SELECT q.id, i.image_key, i.mime_type, i.width, i.height
+        FROM run_questions q JOIN question_images i ON i.image_key = q.image_key
+        WHERE q.quiz_run_id = ? AND i.status = 'AVAILABLE'
+        """, questionId, questionId == null ? new Object[] {runId} : new Object[] {runId, questionId});
+  }
+
+  private Map<Long, Metadata> queryImages(String sql, Long questionId, Object... parameters) {
     if (questionId != null) sql += " AND q.id = ?";
     return jdbc.query(sql, rows -> {
           Map<Long, Metadata> images = new java.util.HashMap<>();
