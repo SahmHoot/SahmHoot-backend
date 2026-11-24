@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import com.google.auth.oauth2.ComputeEngineCredentials;
+import com.google.auth.oauth2.GoogleCredentials;
 import com.google.cloud.ReadChannel;
 import com.google.cloud.storage.Blob;
 import com.google.cloud.storage.BlobId;
@@ -18,6 +20,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 class GcsImageStorageTest {
   private final UUID key = UUID.randomUUID();
@@ -88,6 +91,48 @@ class GcsImageStorageTest {
       assertThat(e.reason()).isEqualTo(reason);
       assertThat(e.getMessage()).doesNotContain("provider details");
     });
+  }
+
+  @Test
+  void productionRequiresGcsSettingsEvenIfLocalIsAlsoActive() {
+    new ApplicationContextRunner()
+        .withUserConfiguration(GcsImageStorageConfiguration.class, LocalImageStorageConfiguration.class)
+        .withInitializer(context -> context.getEnvironment().setActiveProfiles("local", "prod"))
+        .withPropertyValues("app.question-images.enabled=true")
+        .run(context -> assertThat(context).hasFailed().getFailure()
+            .hasRootCauseMessage("GCS image storage requires a valid project ID and bucket name"));
+  }
+
+  @Test
+  void productionBindsTheRealSdkWithSimulatedVmAdc() {
+    var credentials = ComputeEngineCredentials.create();
+    try (var auth = mockStatic(GoogleCredentials.class)) {
+      auth.when(GoogleCredentials::getApplicationDefault).thenReturn(credentials);
+      new ApplicationContextRunner()
+          .withUserConfiguration(GcsImageStorageConfiguration.class, LocalImageStorageConfiguration.class)
+          .withInitializer(context -> context.getEnvironment().setActiveProfiles("prod", "local"))
+          .withPropertyValues("app.question-images.enabled=true", "APP_QUESTION_IMAGES_GCS_PROJECT_ID=example-project",
+              "APP_QUESTION_IMAGES_GCS_BUCKET=example-image-bucket")
+          .run(context -> {
+            assertThat(context).hasSingleBean(ImageStorage.class);
+            assertThat(context.getBean(ImageStorage.class)).isInstanceOf(GcsImageStorage.class);
+          });
+      auth.verify(GoogleCredentials::getApplicationDefault);
+    }
+  }
+
+  @Test
+  void enabledProductionRejectsUnavailableAdc() {
+    try (var auth = mockStatic(GoogleCredentials.class)) {
+      auth.when(GoogleCredentials::getApplicationDefault).thenThrow(new IOException("no metadata service"));
+      new ApplicationContextRunner()
+          .withUserConfiguration(GcsImageStorageConfiguration.class, LocalImageStorageConfiguration.class)
+          .withInitializer(context -> context.getEnvironment().setActiveProfiles("prod", "local"))
+          .withPropertyValues("app.question-images.enabled=true",
+              "app.question-images.gcs.project-id=example-project", "app.question-images.gcs.bucket=example-bucket")
+          .run(context -> assertThat(context).hasFailed().getFailure()
+              .hasRootCauseMessage("Image storage operation failed (AUTHENTICATION)"));
+    }
   }
 
   @Test

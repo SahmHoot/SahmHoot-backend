@@ -41,6 +41,8 @@ class LocalSeedIntegrationTest {
   @Test
   void migratesRollsBackSeedsLogsInAndSurvivesAnApplicationRestart() throws Exception {
     try (var prod = start("prod", "--app.seed.enabled=true")) {
+      assertThat(prod.getBeansOfType(com.sahmhoot.questionimage.storage.ImageStorage.class)).isEmpty();
+      assertThat(prod.getBeansOfType(com.sahmhoot.questionimage.service.QuestionImageLifecycle.class)).isEmpty();
       JdbcTemplate jdbc = prod.getBean(JdbcTemplate.class);
       assertThat(prod.getBeansOfType(LocalSeedRunner.class)).isEmpty();
       assertThat(jdbc.queryForObject("""
