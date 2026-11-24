@@ -1,0 +1,138 @@
+package com.sahmhoot.questionimage.service;
+
+import static com.sahmhoot.questionimage.storage.ImageStorage.MAX_BYTES;
+
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
+import java.util.UUID;
+import java.util.zip.CRC32;
+import javax.imageio.ImageIO;
+import javax.imageio.stream.MemoryCacheImageInputStream;
+import javax.imageio.stream.MemoryCacheImageOutputStream;
+import org.springframework.stereotype.Component;
+
+@Component
+public class QuestionImageValidator {
+  private static final byte[] PNG_SIGNATURE = {(byte) 137, 80, 78, 71, 13, 10, 26, 10};
+  private static final int PNG_END = 0x49454e44;
+
+  public record ValidatedImage(UUID key, String mimeType, int width, int height, byte[] content) {}
+
+  // Bound peak decoding memory across concurrent calls on the application bean.
+  public synchronized ValidatedImage validate(InputStream source, String declaredMimeType) throws IOException {
+    byte[] input = source.readNBytes(MAX_BYTES + 1);
+    if (input.length < 8 || input.length > MAX_BYTES) {
+      throw new InvalidImageException();
+    }
+    boolean png = "image/png".equalsIgnoreCase(declaredMimeType)
+        && Arrays.equals(input, 0, 8, PNG_SIGNATURE, 0, 8);
+    boolean jpeg = "image/jpeg".equalsIgnoreCase(declaredMimeType)
+        && (input[0] & 255) == 255 && (input[1] & 255) == 216
+        && (input[input.length - 2] & 255) == 255 && (input[input.length - 1] & 255) == 217;
+    if (!png && !jpeg) {
+      throw new InvalidImageException();
+    }
+    byte[] sanitized = png ? sanitizePng(input) : input;
+    String format = png ? "png" : "jpeg";
+    var reader = ImageIO.getImageReadersByFormatName(format).next();
+    try (var stream = new MemoryCacheImageInputStream(new ByteArrayInputStream(sanitized))) {
+      reader.setInput(stream, true, true);
+      reader.addIIOReadWarningListener((ignored, warning) -> {
+        throw new InvalidImageException();
+      });
+      int width = reader.getWidth(0);
+      int height = reader.getHeight(0);
+      if (width <= 0 || height <= 0 || width > 4096 || height > 4096 || (long) width * height > 16_000_000) {
+        throw new InvalidImageException();
+      }
+      BufferedImage decoded = reader.read(0);
+      // A fresh raster drops input metadata and normalizes JPEG color types.
+      int rasterType = png && decoded.getColorModel().hasAlpha()
+          ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB;
+      var clean = new BufferedImage(width, height, rasterType);
+      var graphics = clean.createGraphics();
+      try {
+        graphics.drawImage(decoded, 0, 0, null);
+      } finally {
+        graphics.dispose();
+        decoded.flush();
+      }
+      var encoded = new BoundedImageOutput();
+      try (var output = new MemoryCacheImageOutputStream(encoded)) {
+        ImageIO.write(clean, format, output);
+      } finally {
+        clean.flush();
+      }
+      if (encoded.bytes.size() == 0) {
+        throw new InvalidImageException();
+      }
+      return new ValidatedImage(UUID.randomUUID(), "image/" + format, width, height, encoded.bytes.toByteArray());
+    } catch (IOException e) {
+      throw new InvalidImageException();
+    } finally {
+      reader.dispose();
+    }
+  }
+
+  private byte[] sanitizePng(byte[] input) {
+    var bytes = ByteBuffer.wrap(input);
+    bytes.position(PNG_SIGNATURE.length);
+    var crc = new CRC32();
+    var sanitized = new ByteArrayOutputStream();
+    sanitized.writeBytes(PNG_SIGNATURE);
+    while (bytes.remaining() >= 12) {
+      int chunkOffset = bytes.position();
+      int length = bytes.getInt();
+      int typeOffset = bytes.position();
+      int type = bytes.getInt();
+      if (length < 0 || length > bytes.remaining() - 4) {
+        break;
+      }
+      crc.reset();
+      crc.update(input, typeOffset, length + 4);
+      bytes.position(bytes.position() + length);
+      if ((int) crc.getValue() != bytes.getInt()) {
+        break;
+      }
+      // Preserve rendering chunks without passing compressed metadata to the decoder.
+      if ((type & 0x20000000) == 0 || type == 0x74524e53) {
+        sanitized.write(input, chunkOffset, length + 12);
+      }
+      if (type == PNG_END) {
+        if (length == 0 && !bytes.hasRemaining()) {
+          return sanitized.toByteArray();
+        }
+        break;
+      }
+    }
+    throw new InvalidImageException();
+  }
+
+  private static final class BoundedImageOutput extends OutputStream {
+    private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+
+    @Override
+    public void write(int value) throws IOException {
+      checkCapacity(1);
+      bytes.write(value);
+    }
+
+    @Override
+    public void write(byte[] content, int offset, int length) throws IOException {
+      checkCapacity(length);
+      bytes.write(content, offset, length);
+    }
+
+    private void checkCapacity(int length) throws IOException {
+      if (length > MAX_BYTES - bytes.size()) {
+        throw new IOException("Encoded question image exceeds size limit");
+      }
+    }
+  }
+}
