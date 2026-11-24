@@ -54,11 +54,24 @@ class ChatMigrationIntegrationTest {
           VALUES (80000,80000,80000,'Legacy nickname',UTC_TIMESTAMP())
           """);
     }
-    var flyway = configuration.target("latest").load();
+    var flyway = configuration.target("2").load();
     assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     try (var c = connect(); var s = c.createStatement()) {
+      s.executeUpdate("""
+          INSERT INTO chat_messages(room_id,sender_participant_id,content,created_at)
+          VALUES (80000,80000,'Preserved V2 chat',UTC_TIMESTAMP())
+          """);
+      var latest = configuration.target("latest").load();
+      latest.migrate();
+      latest.validate();
+      assertThat(latest.info().applied()).anyMatch(info -> "3".equals(info.getVersion().getVersion()));
+      try (var r = s.executeQuery("SELECT content FROM chat_messages WHERE room_id=80000")) {
+        assertThat(r.next()).isTrue();
+        assertThat(r.getString(1)).isEqualTo("Preserved V2 chat");
+      }
+      s.executeUpdate("DELETE FROM chat_messages WHERE room_id=80000");
       try (var r = s.executeQuery("SELECT name FROM users WHERE id = 80000")) {
         assertThat(r.next()).isTrue();
         assertThat(r.getString(1)).isEqualTo("Preserved");
