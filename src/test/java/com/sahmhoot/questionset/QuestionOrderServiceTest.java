@@ -16,7 +16,7 @@ class QuestionOrderServiceTest {
   private final QuestionSetRepository sets = mock(QuestionSetRepository.class);
   private final QuestionRepository questions = mock(QuestionRepository.class);
   private final ChoiceRepository choices = mock(ChoiceRepository.class);
-  private final QuestionService service = new QuestionService(sets, questions, choices);
+  private final QuestionService service = new QuestionService(sets, questions, choices, mock(com.sahmhoot.questionset.service.port.QuestionImageAccess.class));
   private final QuestionSet set = new QuestionSet(42L, "세트", null, Visibility.PUBLIC);
   private List<Question> existing;
 

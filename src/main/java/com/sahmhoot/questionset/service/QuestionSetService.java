@@ -8,6 +8,7 @@ import com.sahmhoot.questionset.repository.*;
 import java.util.*;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import com.sahmhoot.questionset.service.port.QuestionImageAccess;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +20,7 @@ public class QuestionSetService {
   private final QuestionRepository questions;
   private final ChoiceRepository choices;
   private final QuestionSetQueryRepository query;
+  private final QuestionImageAccess images;
 
   @Transactional(readOnly = true)
   public PublicQuestionSetPageResponse publicSets(int page, int size) {
@@ -50,9 +52,14 @@ public class QuestionSetService {
         : choices.findByQuestionIdInOrderByOrderNoAsc(all.stream().map(Question::getId).toList())
             .stream().collect(Collectors.groupingBy(c -> c.getQuestion().getId(),
                 Collectors.mapping(ChoiceResponse::from, Collectors.toList())));
+    boolean imagesEnabled = images.enabled();
+    var metadata = imagesEnabled ? images.images(setId) : Map.<Long, QuestionImageAccess.Metadata>of();
     return new QuestionSetDetailResponse(set.getId(), set.getTitle(), set.getVisibility(),
         set.getDescription(), query.ownerName(set.getHostId()), all.stream()
-            .map(q -> QuestionResponse.from(q, byQuestion.getOrDefault(q.getId(), List.of()))).toList());
+            .map(q -> {
+              var response = QuestionResponse.from(q, byQuestion.getOrDefault(q.getId(), List.of()));
+              return imagesEnabled ? response.withImage(setId, metadata.get(q.getId())) : response;
+            }).toList());
   }
 
   @Transactional

@@ -11,6 +11,8 @@ import com.sahmhoot.questionset.controller.QuestionImageController;
 import com.sahmhoot.questionset.exception.QuestionSetRestExceptionHandler;
 import com.sahmhoot.questionset.service.QuestionImageService;
 import com.sahmhoot.questionset.service.port.QuestionImageAccess;
+import com.sahmhoot.questionset.repository.QuestionRepository;
+import com.sahmhoot.questionset.service.QuestionSetService;
 import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -42,6 +44,37 @@ class QuestionImageControllerTest {
     mvc.perform(multipart("/api/question-sets/7/images").file(file("file")).file(file("file")))
         .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
     verifyNoInteractions(images);
+  }
+
+  @Test
+  void servesBytesWithoutAllowingSharedCachingOrSniffing() throws Exception {
+    when(auth.requireUser()).thenReturn(user);
+    byte[] bytes = {1, 2, 3};
+    when(images.download(7, 8, 1)).thenReturn(new QuestionImageService.Download("image/png", bytes));
+    mvc.perform(get("/api/question-sets/7/questions/8/image"))
+        .andExpect(status().isOk()).andExpect(content().bytes(bytes))
+        .andExpect(content().contentType("image/png")).andExpect(header().string("Content-Length", "3"))
+        .andExpect(header().string("Cache-Control", "no-store, private"))
+        .andExpect(header().string("X-Content-Type-Options", "nosniff"));
+  }
+
+  @Test
+  void uses503OnlyForTransientStorageFailures() throws Exception {
+    var port = mock(QuestionImageAccess.class);
+    var service = new QuestionImageService(mock(QuestionSetService.class), port, mock(QuestionRepository.class));
+    var api = MockMvcBuilders.standaloneSetup(new QuestionImageController(auth, service))
+        .setControllerAdvice(new QuestionSetRestExceptionHandler()).build();
+    var key = UUID.randomUUID();
+    when(auth.requireUser()).thenReturn(user);
+    when(port.enabled()).thenReturn(true);
+    when(port.image(7, 8)).thenReturn(new QuestionImageAccess.Metadata(key, "image/png", 1, 1));
+    when(port.read(key)).thenThrow(new QuestionImageAccess.ImageAccessException(
+        QuestionImageAccess.Failure.TEMPORARY_STORAGE));
+    api.perform(get("/api/question-sets/7/questions/8/image"))
+        .andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.code").value("IMAGE_STORAGE_UNAVAILABLE"));
+    doThrow(new QuestionImageAccess.ImageAccessException(QuestionImageAccess.Failure.STORAGE)).when(port).read(key);
+    api.perform(get("/api/question-sets/7/questions/8/image"))
+        .andExpect(status().isInternalServerError()).andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
   }
 
   private MockMultipartFile file(String name) {

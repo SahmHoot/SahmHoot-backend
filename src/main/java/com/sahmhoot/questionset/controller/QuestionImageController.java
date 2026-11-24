@@ -50,4 +50,15 @@ public class QuestionImageController {
       return images.upload(setId, user, stream, file.getContentType());
     }
   }
+
+  @GetMapping("/questions/{questionId}/image")
+  public ResponseEntity<byte[]> image(@PathVariable @Positive long setId, @PathVariable @Positive long questionId) {
+    var download = images.download(setId, questionId, auth.requireUser().id());
+    return ResponseEntity.ok()
+        .contentType(MediaType.parseMediaType(download.mimeType()))
+        .contentLength(download.content().length)
+        .header("X-Content-Type-Options", "nosniff")
+        .cacheControl(CacheControl.noStore().cachePrivate())
+        .body(download.content());
+  }
 }

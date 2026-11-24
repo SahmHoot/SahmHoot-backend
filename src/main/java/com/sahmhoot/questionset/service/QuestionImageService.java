@@ -4,6 +4,7 @@ import com.sahmhoot.questionset.auth.QuestionSetCurrentUser;
 import com.sahmhoot.questionset.exception.QuestionSetErrorCode;
 import com.sahmhoot.questionset.exception.QuestionSetException;
 import com.sahmhoot.questionset.service.port.QuestionImageAccess;
+import com.sahmhoot.questionset.repository.QuestionRepository;
 import com.sahmhoot.questionset.service.port.QuestionImageAccess.ImageAccessException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -16,8 +17,11 @@ import org.springframework.stereotype.Service;
 @Service
 @RequiredArgsConstructor
 public class QuestionImageService {
+  public record Download(String mimeType, byte[] content) {}
+
   private final QuestionSetService sets;
   private final QuestionImageAccess images;
+  private final QuestionRepository questions;
 
   public QuestionImageAccess.Upload upload(long setId, QuestionSetCurrentUser user, InputStream file, String mimeType) {
     requireEnabled();
@@ -30,6 +34,23 @@ public class QuestionImageService {
       throw translate(e);
     } catch (IOException e) {
       throw new QuestionSetException(QuestionSetErrorCode.INTERNAL_ERROR);
+    }
+  }
+
+  public Download download(long setId, long questionId, long userId) {
+    requireEnabled();
+    sets.readableSet(setId, userId);
+    var metadata = images.image(setId, questionId);
+    if (metadata == null && questions.findByIdAndQuestionSetId(questionId, setId).isEmpty()) {
+      throw new QuestionSetException(QuestionSetErrorCode.QUESTION_NOT_FOUND);
+    }
+    if (metadata == null) {
+      throw new QuestionSetException(QuestionSetErrorCode.QUESTION_IMAGE_NOT_FOUND);
+    }
+    try {
+      return new Download(metadata.mimeType(), images.read(metadata.key()));
+    } catch (ImageAccessException e) {
+      throw translate(e);
     }
   }
 
