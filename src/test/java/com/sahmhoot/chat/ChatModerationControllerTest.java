@@ -45,11 +45,11 @@ class ChatModerationControllerTest {
   }
 
   @Test void managementRoutesUseTheAuthenticatedUserAndPathIds() throws Exception {
-    when(service.author(42L, 1L, 500L)).thenReturn(new ChatAuthorResponse(200L, "익명학생", "student@example.test"));
+    when(service.author(42L, 1L, 500L)).thenReturn(new ChatAuthorResponse(200L, "익명학생", "stu***@example.test"));
     mvc.perform(get(ROOM + "/messages/500/author")).andExpect(status().isOk())
         .andExpect(jsonPath("$.participantId").value(200))
         .andExpect(jsonPath("$.nickname").value("익명학생"))
-        .andExpect(jsonPath("$.email").value("student@example.test"))
+        .andExpect(jsonPath("$.email").value("stu***@example.test"))
         .andExpect(jsonPath("$.length()").value(3));
     mvc.perform(delete(ROOM + "/messages/500")).andExpect(status().isNoContent());
     verify(service).delete(42L, 1L, 500L);

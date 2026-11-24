@@ -239,6 +239,12 @@ class ChatMessagingIntegrationTest {
     var here = messages.saveAndFlush(new ChatMessage(room.getId(), studentParticipantId, "이 방 질문",
         null, Instant.now()));
 
+    var authorUrl = URI.create("http://localhost:" + port + "/api/rooms/" + room.getId()
+        + "/messages/" + here.getId() + "/author");
+    var unauthenticated = http.send(HttpRequest.newBuilder(authorUrl).GET().build(),
+        HttpResponse.BodyHandlers.ofString());
+    assertThat(unauthenticated.statusCode()).isEqualTo(401);
+
     for (User nonOwner : List.of(student, professor)) {
       for (var request : List.of(
           List.of("GET", "/messages/" + here.getId() + "/author"),
@@ -372,7 +378,8 @@ class ChatMessagingIntegrationTest {
     var author = json.readTree(response.body());
     assertThat(author.path("participantId").asLong()).isEqualTo(studentParticipantId);
     assertThat(author.path("nickname").asText()).isEqualTo("익명학생");
-    assertThat(author.path("email").asText()).isEqualTo(student.getEmail());
+    assertThat(author.path("email").asText()).isEqualTo(student.getEmail().substring(0, 3) + "***@test.invalid");
+    assertThat(response.body()).doesNotContain(student.getEmail());
     assertModerationError(student, "GET", path + "/author", 403, "FORBIDDEN");
     var snapshot = state(student);
     for (String list : List.of("recentMessages", "pinnedMessages")) {
