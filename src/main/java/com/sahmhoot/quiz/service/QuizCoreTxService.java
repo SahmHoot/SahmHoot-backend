@@ -34,6 +34,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -59,7 +60,7 @@ public class QuizCoreTxService {
   /**
    * 퀴즈 시작 트랜잭션.
    */
-  @Transactional
+  @Transactional(isolation = Isolation.READ_COMMITTED)
   public StartQuizResponse startQuiz(Long roomId, StartQuizRequest request, Long hostUserId) {
     RoomSnapshot room = getRoomOwnedBy(roomId, hostUserId);
     if (room.status() == RoomStatus.CLOSED) {
@@ -69,6 +70,8 @@ public class QuizCoreTxService {
       throw new BusinessException(ErrorCode.QUIZ_ALREADY_RUNNING);
     }
 
+    // Lock the source before inserting the run, which takes a foreign-key lock on the set.
+    questionSetPort.lockForQuizStart(request.questionSetId());
     validateQuestionSetOwner(request.questionSetId(), hostUserId);
     QuizRun quizRun = createQuizRun(roomId, request.questionSetId());
     roomPort.updateStatus(roomId, RoomStatus.PLAYING);
