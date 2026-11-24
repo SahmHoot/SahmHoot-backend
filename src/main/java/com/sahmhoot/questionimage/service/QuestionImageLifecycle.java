@@ -29,6 +29,11 @@ public final class QuestionImageLifecycle {
   }
 
   public UUID upload(long uploaderId, long questionSetId, InputStream source, String mimeType) throws IOException {
+    return uploadImage(uploaderId, questionSetId, source, mimeType).key();
+  }
+
+  public QuestionImageLifecycleRepository.Reservation uploadImage(long uploaderId, long questionSetId,
+      InputStream source, String mimeType) throws IOException {
     if (!repository.canUpload(uploaderId, questionSetId)) {
       throw new AccessDeniedException("Question set image access denied");
     }
@@ -40,10 +45,12 @@ public final class QuestionImageLifecycle {
       throw new AccessDeniedException("Question set image access denied");
     }
     if (!repository.finishUpload(image.key(), clock.instant(), () -> save(image))) {
-      throw new IllegalStateException("Question image reservation could not be finalized");
+      throw new UploadNotAvailableException();
     }
-    return image.key();
+    return reservation;
   }
+
+  static class UploadNotAvailableException extends IllegalStateException {}
 
   public List<UUID> cleanExpired(int limit) {
     if (limit <= 0) {

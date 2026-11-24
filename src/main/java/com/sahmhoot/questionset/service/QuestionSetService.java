@@ -44,11 +44,7 @@ public class QuestionSetService {
 
   @Transactional(readOnly = true)
   public QuestionSetDetailResponse detail(Long setId, Long userId) {
-    QuestionSet set = sets.findById(setId)
-        .orElseThrow(() -> new QuestionSetException(QuestionSetErrorCode.QUESTION_SET_NOT_FOUND));
-    if (!set.getHostId().equals(userId) && set.getVisibility() != Visibility.PUBLIC) {
-      throw new QuestionSetException(QuestionSetErrorCode.FORBIDDEN);
-    }
+    QuestionSet set = readableSet(setId, userId);
     var all = questions.findByQuestionSetIdOrderByOrderNoAsc(setId);
     Map<Long, List<ChoiceResponse>> byQuestion = all.isEmpty() ? Map.of()
         : choices.findByQuestionIdInOrderByOrderNoAsc(all.stream().map(Question::getId).toList())
@@ -87,6 +83,15 @@ public class QuestionSetService {
       }
       throw e;
     }
+  }
+
+  QuestionSet readableSet(Long setId, Long userId) {
+    QuestionSet set = sets.findById(setId)
+        .orElseThrow(() -> new QuestionSetException(QuestionSetErrorCode.QUESTION_SET_NOT_FOUND));
+    if (!set.getHostId().equals(userId) && set.getVisibility() != Visibility.PUBLIC) {
+      throw new QuestionSetException(QuestionSetErrorCode.FORBIDDEN);
+    }
+    return set;
   }
 
   private QuestionSet owned(Long id, Long userId) {
