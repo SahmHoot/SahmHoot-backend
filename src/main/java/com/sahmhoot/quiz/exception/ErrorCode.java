@@ -24,6 +24,10 @@ public enum ErrorCode {
   QUESTION_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 문항입니다."),
 
   // 1. Quiz Core
+  QUESTION_IMAGE_NOT_FOUND(HttpStatus.NOT_FOUND, "문항 이미지를 찾을 수 없습니다."),
+  QUESTION_IMAGE_NOT_AVAILABLE(HttpStatus.CONFLICT, "연결할 수 없는 이미지입니다."),
+  IMAGE_STORAGE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "이미지 저장소를 일시적으로 사용할 수 없습니다."),
+
   QUIZ_ALREADY_RUNNING(HttpStatus.CONFLICT, "이미 진행 중인 퀴즈가 있습니다."),
   QUIZ_RUN_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 퀴즈 회차입니다."),
   QUIZ_NOT_RUNNING(HttpStatus.CONFLICT, "진행 중인 퀴즈가 아닙니다."),

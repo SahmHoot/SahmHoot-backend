@@ -16,4 +16,6 @@ public interface RunQuestionRepository extends JpaRepository<RunQuestion, Long> 
   Optional<RunQuestion> findByQuizRunIdAndOrderNo(Long quizRunId, int orderNo);
 
   Optional<RunQuestion> findFirstByQuizRunIdAndStatus(Long quizRunId, RunQuestionStatus status);
+
+  Optional<RunQuestion> findFirstByQuizRunIdAndStatusOrderByOrderNoDesc(Long quizRunId, RunQuestionStatus status);
 }
