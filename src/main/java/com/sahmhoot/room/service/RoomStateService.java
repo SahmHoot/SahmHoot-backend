@@ -119,7 +119,8 @@ public class RoomStateService {
       }
       question = new CurrentQuestion(current.runQuestionId(), current.questionNo(), current.questionType(),
           current.timeLimitSeconds(), current.content(), List.copyOf(current.choices()), current.openedAt(),
-          current.closesAt(), current.closedAt(), phase == Phase.FEEDBACK ? current.correctChoiceId() : null);
+          current.closesAt(), current.closedAt(), phase == Phase.FEEDBACK ? current.correctChoiceId() : null,
+          current.image());
     }
     return new Quiz(quiz.runId(), quiz.questionSetTitle(), quiz.totalQuestions(), phase, question,
         phase == Phase.FEEDBACK ? quiz.nextOpensAt() : null,

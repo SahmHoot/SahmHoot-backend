@@ -1,7 +1,9 @@
 package com.sahmhoot.quiz.service;
 
+import com.sahmhoot.questionimage.dto.RunQuestionImage;
 import com.sahmhoot.questionset.service.port.QuestionImageAccess.ImageAccessException;
 import com.sahmhoot.questionset.service.port.QuestionImageAccess.Metadata;
+import com.sahmhoot.quiz.entity.RunQuestion;
 import com.sahmhoot.quiz.entity.RunQuestionStatus;
 import com.sahmhoot.quiz.exception.BusinessException;
 import com.sahmhoot.quiz.exception.ErrorCode;
@@ -11,11 +13,15 @@ import com.sahmhoot.quiz.service.port.RoomLockPort;
 import com.sahmhoot.quiz.service.port.RoomPort;
 import com.sahmhoot.quiz.service.port.RoomStatus;
 import com.sahmhoot.quiz.service.port.RunImageAccess;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 
 @Service
 public class RunQuestionImageService {
@@ -58,6 +64,25 @@ public class RunQuestionImageService {
     }
   }
 
+  RunQuestionImage currentImage(long roomId, long runId, long questionId) {
+    return displayImages(roomId, runId, questionId).apply(questionId);
+  }
+
+  Function<Long, RunQuestionImage> resultImages(long roomId, long runId) {
+    return displayImages(roomId, runId, null);
+  }
+
+  private Function<Long, RunQuestionImage> displayImages(long roomId, long runId, Long questionId) {
+    if (!images.enabled()) return id -> RunQuestionImage.DISABLED;
+    Map<Long, Metadata> metadata = images.runImages(runId, questionId);
+    return id -> {
+      Metadata image = metadata.get(id);
+      return image == null ? null : new RunQuestionImage(
+          UriComponentsBuilder.fromPath(PATH).buildAndExpand(roomId, runId, id).toUriString(),
+          image.mimeType(), image.width(), image.height());
+    };
+  }
+
   private Metadata authorize(long roomId, long runId, long questionId, long userId) {
     var room = rooms.findRoom(roomId).orElseThrow(() -> new BusinessException(ErrorCode.ROOM_NOT_FOUND));
     if (room.status() == RoomStatus.CLOSED) throw new BusinessException(ErrorCode.ROOM_CLOSED);
@@ -78,5 +103,10 @@ public class RunQuestionImageService {
     var metadata = images.runImages(runId, questionId).get(questionId);
     if (metadata == null) throw new BusinessException(ErrorCode.QUESTION_IMAGE_NOT_FOUND);
     return metadata;
+  }
+
+  static RunQuestion currentQuestion(List<RunQuestion> questions) {
+    return questions.stream().filter(RunQuestion::isOpen).findFirst()
+        .orElseGet(() -> questions.reversed().stream().filter(RunQuestion::isClosed).findFirst().orElse(null));
   }
 }

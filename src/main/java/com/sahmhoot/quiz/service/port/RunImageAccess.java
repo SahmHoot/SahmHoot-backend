@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.UUID;
 
 public interface RunImageAccess {
+  boolean enabled();
 
   Map<Long, Metadata> runImages(long runId, Long questionId);
 

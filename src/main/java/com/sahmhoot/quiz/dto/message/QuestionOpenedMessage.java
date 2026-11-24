@@ -1,5 +1,7 @@
 package com.sahmhoot.quiz.dto.message;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.sahmhoot.questionimage.dto.RunQuestionImage;
 import com.sahmhoot.quiz.entity.QuestionType;
 import java.time.Instant;
 import java.util.List;
@@ -18,7 +20,8 @@ public record QuestionOpenedMessage(
     String content,
     int timeLimitSeconds,
     Instant closesAt,
-    List<RunChoiceDetail> choices
+    List<RunChoiceDetail> choices,
+    @JsonInclude(value = JsonInclude.Include.CUSTOM, valueFilter = RunQuestionImage.DisabledFilter.class) RunQuestionImage image
 ) implements QuizMessage {
 
   public QuestionOpenedMessage {
@@ -35,7 +38,8 @@ public record QuestionOpenedMessage(
       int timeLimitSeconds,
       Instant closesAt,
       List<RunChoiceDetail> choices,
-      Instant sentAt
+      Instant sentAt,
+      RunQuestionImage image
   ) {
     return new QuestionOpenedMessage(
         "QUESTION_OPENED",
@@ -48,7 +52,8 @@ public record QuestionOpenedMessage(
         content,
         timeLimitSeconds,
         closesAt,
-        choices
+        choices,
+        image
     );
   }
 }
