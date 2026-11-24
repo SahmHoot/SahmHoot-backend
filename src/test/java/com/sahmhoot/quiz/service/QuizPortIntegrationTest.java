@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 
+import com.sahmhoot.questionimage.service.QuestionImageLifecycleRepository;
 import com.sahmhoot.questionset.auth.QuestionSetCurrentUser;
 import com.sahmhoot.questionset.dto.ChoiceRequest;
 import com.sahmhoot.questionset.dto.CreateQuestionSetRequest;
@@ -29,6 +30,7 @@ import com.sahmhoot.room.service.RoomService;
 import com.sahmhoot.user.Role;
 import com.sahmhoot.user.User;
 import com.sahmhoot.user.UserRepository;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -62,6 +64,7 @@ class QuizPortIntegrationTest {
   @Autowired RunQuestionRepository runQuestions;
   @Autowired RunChoiceRepository runChoices;
   @Autowired JdbcTemplate jdbc;
+  @Autowired QuestionImageLifecycleRepository images;
   /** 실시간 메시지 발행은 이 테스트의 관심사가 아니라 가짜로 둔다. */
   @MockitoBean SimpMessagingTemplate messaging;
   /** 마감 예약은 이 테스트의 관심사가 아니다. 진짜 예약이 남아 정리된 DB에 늦게 실행되지 않도록 가짜로 둔다. */
@@ -89,6 +92,7 @@ class QuizPortIntegrationTest {
       jdbc.update("DELETE FROM choices WHERE question_id IN (SELECT q.id FROM questions q "
           + "JOIN question_sets s ON q.question_set_id = s.id WHERE s.host_id = ?)", id);
       jdbc.update("DELETE FROM questions WHERE question_set_id IN (SELECT id FROM question_sets WHERE host_id = ?)", id);
+      jdbc.update("DELETE FROM question_images WHERE uploader_id = ?", id);
       jdbc.update("DELETE FROM question_sets WHERE host_id = ?", id);
       users.deleteById(id);
     }
@@ -205,6 +209,34 @@ class QuizPortIntegrationTest {
     assertErrorCode(() -> quizCoreService.startQuiz(othersRoomId, new StartQuizRequest(setId), professor.getId()),
         ErrorCode.FORBIDDEN);
     assertNoRunAndRoomStatus(othersRoomId, "OPEN");
+  }
+
+  @Test
+  void copiesAndRetainsSharedImageReferencesWithImagesDisabled() {
+    Long roomId = room(professor);
+    Long setId = set(professor, Visibility.PRIVATE);
+    var first = question(setId, "Image", 10, "a", "b");
+    var second = question(setId, "No image", 10, "a", "b");
+    String key = UUID.randomUUID().toString();
+    jdbc.update("""
+        INSERT INTO question_images (image_key, uploader_id, question_set_id, status, mime_type,
+            size_bytes, width, height, created_at, expires_at, cleanup_after)
+        VALUES (?, ?, ?, 'AVAILABLE', 'image/png', 12, 1, 1, UTC_TIMESTAMP(), UTC_TIMESTAMP(), UTC_TIMESTAMP())
+        """, key, professor.getId(), setId);
+    jdbc.update("UPDATE questions SET image_key = ? WHERE id = ?", key, first.id());
+
+    var firstRun = quizCoreService.startQuiz(roomId, new StartQuizRequest(setId), professor.getId());
+    quizCoreService.abortQuiz(roomId, firstRun.runId(), professor.getId());
+    var secondRun = quizCoreService.startQuiz(roomId, new StartQuizRequest(setId), professor.getId());
+    questionService.delete(setId, first.id(), professor.getId());
+    questionService.delete(setId, second.id(), professor.getId());
+
+    for (var run : List.of(firstRun, secondRun)) {
+      assertThat(jdbc.queryForList(
+          "SELECT image_key FROM run_questions WHERE quiz_run_id = ? ORDER BY order_no", String.class, run.runId()))
+          .containsExactly(key, null);
+    }
+    assertThat(images.claimDeletion(UUID.fromString(key), Instant.now().plusSeconds(10))).isFalse();
   }
 
   private User professor(String name) {
