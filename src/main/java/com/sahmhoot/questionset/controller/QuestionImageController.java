@@ -51,6 +51,10 @@ public class QuestionImageController {
     }
   }
 
+  @ApiResponse(responseCode = "200", description = "Image binary", content = {
+      @Content(mediaType = MediaType.IMAGE_JPEG_VALUE, schema = @Schema(type = "string", format = "binary")),
+      @Content(mediaType = MediaType.IMAGE_PNG_VALUE, schema = @Schema(type = "string", format = "binary"))
+  })
   @GetMapping("/questions/{questionId}/image")
   public ResponseEntity<byte[]> image(@PathVariable @Positive long setId, @PathVariable @Positive long questionId) {
     var download = images.download(setId, questionId, auth.requireUser().id());
