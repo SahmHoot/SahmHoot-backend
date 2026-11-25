@@ -11,7 +11,6 @@ import com.sahmhoot.questionset.controller.QuestionImageController;
 import com.sahmhoot.questionset.exception.QuestionSetRestExceptionHandler;
 import com.sahmhoot.questionset.service.QuestionImageService;
 import com.sahmhoot.questionset.service.port.QuestionImageAccess;
-import com.sahmhoot.questionset.repository.QuestionRepository;
 import com.sahmhoot.questionset.service.QuestionSetService;
 import java.time.Instant;
 import java.util.UUID;
@@ -61,13 +60,14 @@ class QuestionImageControllerTest {
   @Test
   void uses503OnlyForTransientStorageFailures() throws Exception {
     var port = mock(QuestionImageAccess.class);
-    var service = new QuestionImageService(mock(QuestionSetService.class), port, mock(QuestionRepository.class));
+    var sets = mock(QuestionSetService.class);
+    var service = new QuestionImageService(sets, port);
     var api = MockMvcBuilders.standaloneSetup(new QuestionImageController(auth, service))
         .setControllerAdvice(new QuestionSetRestExceptionHandler()).build();
     var key = UUID.randomUUID();
     when(auth.requireUser()).thenReturn(user);
     when(port.enabled()).thenReturn(true);
-    when(port.image(7, 8)).thenReturn(new QuestionImageAccess.Metadata(key, "image/png", 1, 1));
+    when(sets.readableImage(7, 8, user.id())).thenReturn(new QuestionImageAccess.Metadata(key, "image/png", 1, 1));
     when(port.read(key)).thenThrow(new QuestionImageAccess.ImageAccessException(
         QuestionImageAccess.Failure.TEMPORARY_STORAGE));
     api.perform(get("/api/question-sets/7/questions/8/image"))

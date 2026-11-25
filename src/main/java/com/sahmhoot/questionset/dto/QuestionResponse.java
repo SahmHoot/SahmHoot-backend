@@ -2,6 +2,8 @@ package com.sahmhoot.questionset.dto;
 
 import com.fasterxml.jackson.annotation.JsonAnyGetter;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import io.swagger.v3.oas.annotations.StringToClassMapItem;
+import io.swagger.v3.oas.annotations.media.Schema;
 import com.sahmhoot.questionset.entity.Question;
 import com.sahmhoot.questionset.service.port.QuestionImageAccess.Metadata;
 import java.util.Collections;
@@ -9,9 +11,11 @@ import java.util.Map;
 import com.sahmhoot.questionset.entity.QuestionType;
 import java.util.List;
 
+@Schema(properties = @StringToClassMapItem(key = "image", value = QuestionResponse.Image.class))
 public record QuestionResponse(Long id, int orderNo, QuestionType type, String content,
     int timeLimitSeconds, List<ChoiceResponse> choices, @JsonIgnore boolean imagesEnabled,
     @JsonIgnore Image image) {
+  @Schema(name = "QuestionImage", nullable = true, types = {"object", "null"}, description = "Omitted when question images are disabled.")
   public record Image(String url, String mimeType, int width, int height) {}
 
   public QuestionResponse(Long id, int orderNo, QuestionType type, String content, int timeLimitSeconds,

@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import com.sahmhoot.questionset.service.port.QuestionImageAccess;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -90,6 +91,17 @@ public class QuestionSetService {
       }
       throw e;
     }
+  }
+
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+  public QuestionImageAccess.Metadata readableImage(long setId, long questionId, long userId) {
+    readableSet(setId, userId);
+    var metadata = images.image(setId, questionId);
+    if (metadata != null) return metadata;
+    if (questions.findByIdAndQuestionSetId(questionId, setId).isEmpty()) {
+      throw new QuestionSetException(QuestionSetErrorCode.QUESTION_NOT_FOUND);
+    }
+    throw new QuestionSetException(QuestionSetErrorCode.QUESTION_IMAGE_NOT_FOUND);
   }
 
   QuestionSet readableSet(Long setId, Long userId) {
