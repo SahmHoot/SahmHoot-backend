@@ -72,6 +72,7 @@ flowchart LR
 |---|---|
 | `location /` + `try_files ... /index.html` | 파일이 없으면 `index.html`을 준다. React Router 경로를 새로고침해도 404가 나지 않는다 |
 | `location /api/` | `/api/*` 요청을 Spring Boot(8080)로 넘긴다. `X-Forwarded-*`로 원래 클라이언트 IP와 https 여부를 전달한다 |
+| `location ~ ^/api/question-sets/[0-9]+/images$` | 문항 이미지 업로드 경로의 전체 요청을 6 MiB로 제한한다. 다른 API의 기존 한도와 Spring Boot 업스트림·전달 헤더를 유지한다 |
 | `location /ws` | WebSocket 업그레이드(`Upgrade`, `Connection` 헤더, HTTP/1.1)를 Spring Boot로 넘긴다. `proxy_read_timeout 3600s`는 수업 중 연결이 60초 기본값에 끊기지 않게 한다 |
 | 443 `server` | 인증서 경로와 TLS 설정. 개인키(`privkey.pem`)는 경로만 적혀 있고 내용은 서버 밖으로 꺼내지 않는다 |
 | 80 `server` | 두 도메인의 HTTP 요청을 HTTPS로 301 리디렉션한다. 그 외 Host는 404 |
@@ -96,6 +97,19 @@ flowchart LR
 | `ALLOWED_EMAIL_DOMAINS` | 미설정 | 가입 허용 도메인. 운영 전에 정한다 |
 
 `DB_URL`은 기본값(`localhost:3306/sahmhoot`)을 쓴다. 환경변수를 바꾼 뒤에는 `sudo systemctl restart sahmhoot`로 다시 읽게 한다.
+
+### 문항 이미지 GCS 연동 (#121)
+
+- 운영 `/etc/sahmhoot.env`에 `APP_QUESTION_IMAGES_GCS_PROJECT_ID`와 `APP_QUESTION_IMAGES_GCS_BUCKET`을 설정한다.
+  버킷에는 `gs://` 없이 이름만 넣는다. `APP_QUESTION_IMAGES_ENABLED=false`로 준비하고 별도 활성화 승인 전에는 유지한다.
+- 운영 VM에 연결된 서비스 계정의 메타데이터 ADC를 사용한다. Storage 읽기·쓰기 OAuth scope와 버킷의
+  `storage.objects.create`, `storage.objects.get`, `storage.objects.delete` 권한을 확인한다.
+  서비스 계정 키 파일을 발급하거나 `GOOGLE_APPLICATION_CREDENTIALS`를 설정하지 않는다.
+- 변경 전 환경변수 파일과 Nginx 사이트 파일을 root 전용 디렉터리에 백업한다. 이미지 업로드 경로의 6 MiB 한도는
+  Nginx에 적용하고 Spring Boot는 파일당 5 MiB, multipart 요청당 6 MiB를 제한한다. `sudo nginx -t` 성공 후
+  `sudo systemctl reload nginx`를 실행한다. 오류가 나면 백업본을 복원하고 구문·헬스를 다시 확인한다.
+- 환경변수 파일 변경은 다음 서비스 시작 때 읽힌다. 승인된 버전을 배포하기 전 DB 백업과 Flyway V3 적용·복구 절차를
+  확인한다. 플래그가 꺼져 있어도 배포 시 스키마 마이그레이션이 실행될 수 있다.
 
 ## 재배포
 
