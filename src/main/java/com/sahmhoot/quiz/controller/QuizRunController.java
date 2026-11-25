@@ -73,7 +73,7 @@ public class QuizRunController {
    * 인증된 Principal에서 userId를 추출한다.
    * 인증 정보가 없거나 숫자로 파싱할 수 없으면 UNAUTHORIZED 예외를 던진다.
    */
-  private Long extractUserId(Principal principal) {
+  static Long extractUserId(Principal principal) {
     if (principal == null || principal.getName() == null) {
       throw new BusinessException(ErrorCode.UNAUTHORIZED, "인증 정보가 없습니다.");
     }

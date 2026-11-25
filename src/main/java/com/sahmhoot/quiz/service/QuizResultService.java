@@ -1,5 +1,6 @@
 package com.sahmhoot.quiz.service;
 
+import com.sahmhoot.questionimage.dto.RunQuestionImage;
 import com.sahmhoot.quiz.exception.BusinessException;
 import com.sahmhoot.quiz.exception.ErrorCode;
 import com.sahmhoot.quiz.dto.QuizResultResponse;
@@ -35,6 +36,7 @@ public class QuizResultService {
   private final RunQuestionRepository runQuestionRepository;
   private final RunChoiceRepository runChoiceRepository;
   private final AnswerRepository answerRepository;
+  private final RunQuestionImageService images;
 
   /**
    * 퀴즈 회차(runId)의 결과를 집계하여 반환한다.
@@ -58,11 +60,12 @@ public class QuizResultService {
 
     List<QuizResultResponse.QuestionResultDetail> questionDetails = new ArrayList<>();
 
+    var resultImages = images.resultImages(quizRun.getRoomId(), runId);
     int questionNo = 1; // 1..N 순번 보장 (비연속 orderNo 대응)
     for (RunQuestion question : questions) {
       List<RunChoice> choices = choicesByQuestionId.getOrDefault(question.getId(), List.of());
       List<Answer> questionAnswers = answersByQuestionId.getOrDefault(question.getId(), List.of());
-      questionDetails.add(buildQuestionResult(question, questionNo++, choices, questionAnswers));
+      questionDetails.add(buildQuestionResult(question, questionNo++, choices, questionAnswers, resultImages.apply(question.getId())));
     }
 
     log.info("Aggregated quiz result for runId={}: total questions={}", runId, questionDetails.size());
@@ -73,7 +76,8 @@ public class QuizResultService {
       RunQuestion question,
       int questionNo,
       List<RunChoice> choices,
-      List<Answer> answers
+      List<Answer> answers,
+      RunQuestionImage image
   ) {
     Map<Long, Long> choiceCounts = answers.stream()
         .collect(Collectors.groupingBy(a -> a.getRunChoice().getId(), Collectors.counting()));
@@ -107,7 +111,8 @@ public class QuizResultService {
         answeredCount,
         correctCount,
         incorrectCount,
-        choiceDetails
+        choiceDetails,
+        image
     );
   }
 }

@@ -35,8 +35,8 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class QuizQuestionSetAdapter implements QuestionSetPort {
   private static final String INSERT_RUN_QUESTION_SQL =
-      "INSERT INTO run_questions (quiz_run_id, type, content, time_limit_seconds, order_no, status) "
-          + "VALUES (?, ?, ?, ?, ?, 'READY')";
+      "INSERT INTO run_questions (quiz_run_id, type, content, time_limit_seconds, order_no, status, image_key) "
+          + "VALUES (?, ?, ?, ?, ?, 'READY', (SELECT image_key FROM questions WHERE id = ?))";
   private static final String INSERT_RUN_CHOICE_SQL =
       "INSERT INTO run_choices (run_question_id, content, order_no, is_correct) VALUES (?, ?, ?, ?)";
 
@@ -44,6 +44,12 @@ public class QuizQuestionSetAdapter implements QuestionSetPort {
   private final QuestionRepository questions;
   private final ChoiceRepository choices;
   private final JdbcTemplate jdbc;
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void lockForQuizStart(Long questionSetId) {
+    sets.findLockedById(questionSetId);
+  }
 
   /** 세트를 찾아 퀴즈에 필요한 값(ID, 주인, 제목)만 담아 돌려준다. 세트 엔티티는 넘기지 않는다. */
   @Override
@@ -88,6 +94,7 @@ public class QuizQuestionSetAdapter implements QuestionSetPort {
       statement.setString(3, original.getContent());
       statement.setInt(4, original.getTimeLimitSeconds());
       statement.setInt(5, original.getOrderNo());
+      statement.setLong(6, original.getId());
       return statement;
     }, keyHolder);
     Number generatedKey = keyHolder.getKey();
