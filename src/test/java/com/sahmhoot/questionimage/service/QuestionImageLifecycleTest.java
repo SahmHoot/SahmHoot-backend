@@ -13,6 +13,9 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -25,7 +28,7 @@ class QuestionImageLifecycleTest {
   private final QuestionImageValidator validator = mock(QuestionImageValidator.class);
   private final QuestionImageLifecycleRepository repository = mock(QuestionImageLifecycleRepository.class);
   private final QuestionImageLifecycle lifecycle =
-      new QuestionImageLifecycle(validator, repository, storage, Clock.fixed(now, ZoneOffset.UTC));
+      new QuestionImageLifecycle(validator, repository, storage, Clock.fixed(now, ZoneOffset.UTC), 1);
 
   @Test
   void deniesStorageForUsersWithoutSetOwnership() throws Exception {
@@ -60,6 +63,8 @@ class QuestionImageLifecycleTest {
     assertThatThrownBy(() -> lifecycle.upload(1, 2, InputStream.nullInputStream(), "image/png"))
         .isSameAs(unavailable);
     verify(storage, never()).delete(key);
+    doNothing().when(storage).save(eq(key), anyString(), any());
+    assertThat(lifecycle.upload(1, 2, InputStream.nullInputStream(), "image/png")).isEqualTo(key);
   }
 
   @Test
@@ -77,6 +82,37 @@ class QuestionImageLifecycleTest {
     assertThat(lifecycle.cleanExpired(10)).isEmpty();
     verify(storage, never()).delete(unclaimed);
     verify(storage, times(2)).delete(key);
+  }
+
+  @Test
+  void defersCleanupAndRejectsExcessUploadsBeforeDatabaseWorkWhileStorageIsBusy() throws Exception {
+    var writing = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    givenValidatedImage();
+    when(repository.reserve(any())).thenReturn(true);
+    when(repository.finishUpload(eq(key), eq(now), any())).thenAnswer(call -> {
+      writing.countDown();
+      assertThat(release.await(5, TimeUnit.SECONDS)).isTrue();
+      return true;
+    });
+    when(repository.cleanupCandidates(now, 10)).thenReturn(List.of(key));
+    try (var workers = Executors.newVirtualThreadPerTaskExecutor()) {
+      var upload = workers.submit(() -> lifecycle.upload(1, 2, InputStream.nullInputStream(), "image/png"));
+      try {
+        assertThat(writing.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThatThrownBy(() -> lifecycle.upload(1, 2, InputStream.nullInputStream(), "image/png"))
+            .isInstanceOfSatisfying(ImageStorageException.class,
+                error -> assertThat(error.reason()).isEqualTo(ImageStorageException.Reason.UNAVAILABLE));
+        assertThat(lifecycle.cleanExpired(10)).isEmpty();
+        verify(repository, times(1)).canUpload(1, 2);
+        verify(repository, never()).claimDeletion(any(), any());
+      } finally {
+        release.countDown();
+      }
+      assertThat(upload.get(5, TimeUnit.SECONDS)).isEqualTo(key);
+    }
+    lifecycle.cleanExpired(10);
+    verify(repository).claimDeletion(key, now);
   }
 
   private void givenValidatedImage() throws Exception {
