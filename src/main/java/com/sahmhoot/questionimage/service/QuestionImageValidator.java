@@ -43,14 +43,12 @@ public class QuestionImageValidator {
     if (png != pngMime || jpeg != jpegMime) {
       throw new InvalidImageException(InvalidImageException.Reason.UNSUPPORTED);
     }
-    if (jpeg && ((input[input.length - 2] & 255) != 255 || (input[input.length - 1] & 255) != 217)) {
-      throw new InvalidImageException();
-    }
     byte[] sanitized = png ? sanitizePng(input) : input;
     String format = png ? "png" : "jpeg";
     var reader = ImageIO.getImageReadersByFormatName(format).next();
     try (var stream = new MemoryCacheImageInputStream(new ByteArrayInputStream(sanitized))) {
       reader.setInput(stream, true, true);
+      // The JPEG reader detects a missing EOI. Valid JPEGs can have data after that marker.
       reader.addIIOReadWarningListener((ignored, warning) -> {
         throw new InvalidImageException();
       });
@@ -60,15 +58,9 @@ public class QuestionImageValidator {
         throw new InvalidImageException(InvalidImageException.Reason.DIMENSIONS);
       }
       BufferedImage decoded = reader.read(0);
-      // A fresh raster drops input metadata and normalizes JPEG color types.
-      int rasterType = png && decoded.getColorModel().hasAlpha()
-          ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB;
-      var clean = new BufferedImage(width, height, rasterType);
-      var graphics = clean.createGraphics();
-      try {
-        graphics.drawImage(decoded, 0, 0, null);
-      } finally {
-        graphics.dispose();
+      // Encode only pixels. Keep PNG's original raster and palette to avoid expanding compact images.
+      BufferedImage clean = png ? decoded : JpegExifOrientation.apply(decoded, input);
+      if (clean != decoded) {
         decoded.flush();
       }
       var encoded = new BoundedImageOutput();
@@ -80,7 +72,8 @@ public class QuestionImageValidator {
       if (encoded.bytes.size() == 0) {
         throw new InvalidImageException();
       }
-      return new ValidatedImage(UUID.randomUUID(), "image/" + format, width, height, encoded.bytes.toByteArray());
+      return new ValidatedImage(UUID.randomUUID(), "image/" + format, clean.getWidth(), clean.getHeight(),
+          encoded.bytes.toByteArray());
     } catch (IOException e) {
       throw new InvalidImageException();
     } finally {
