@@ -17,7 +17,7 @@ class LocalImageStorageTest {
   void bindsLocalStorageWithoutCloudCredentialsAndExcludesItFromProduction() {
     var runner = new ApplicationContextRunner()
         .withUserConfiguration(LocalImageStorageConfiguration.class)
-        .withPropertyValues("app.question-images.local-directory=" + directory);
+        .withPropertyValues("app.question-images.enabled=true", "app.question-images.local-directory=" + directory);
     runner.withInitializer(context -> context.getEnvironment().setActiveProfiles("local"))
         .run(context -> {
           assertThat(context).hasSingleBean(ImageStorage.class);
@@ -27,6 +27,16 @@ class LocalImageStorageTest {
         });
     runner.withInitializer(context -> context.getEnvironment().setActiveProfiles("local", "prod"))
         .run(context -> assertThat(context).doesNotHaveBean(ImageStorage.class));
+  }
+
+  @Test
+  void disabledLocalStorageIgnoresAnUnavailableDirectory() throws Exception {
+    Path file = Files.createFile(directory.resolve("not-a-directory"));
+    new ApplicationContextRunner()
+        .withUserConfiguration(LocalImageStorageConfiguration.class)
+        .withInitializer(context -> context.getEnvironment().setActiveProfiles("local"))
+        .withPropertyValues("app.question-images.local-directory=" + file)
+        .run(context -> assertThat(context).hasNotFailed().doesNotHaveBean(ImageStorage.class));
   }
 
   @Test
