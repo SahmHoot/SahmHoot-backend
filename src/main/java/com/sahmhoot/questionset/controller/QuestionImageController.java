@@ -7,6 +7,10 @@ import com.sahmhoot.questionset.service.QuestionImageService;
 import com.sahmhoot.questionset.service.port.QuestionImageAccess;
 import jakarta.validation.constraints.Positive;
 import java.io.IOException;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.CacheControl;
@@ -14,6 +18,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.multipart.MultipartHttpServletRequest;
 
 @RestController
@@ -24,6 +29,13 @@ public class QuestionImageController {
   private final QuestionSetCurrentUserResolver auth;
   private final QuestionImageService images;
 
+  record UploadForm(@Schema(type = "string", format = "binary", requiredMode = Schema.RequiredMode.REQUIRED)
+      MultipartFile file) {}
+
+  @ApiResponse(responseCode = "201", description = "Image uploaded", content = @Content(
+      mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = QuestionImageAccess.Upload.class)))
+  @RequestBody(required = true, content = @Content(mediaType = MediaType.MULTIPART_FORM_DATA_VALUE,
+      schema = @Schema(implementation = UploadForm.class)))
   @PostMapping(value = "/images", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   @ResponseStatus(HttpStatus.CREATED)
   public QuestionImageAccess.Upload upload(@PathVariable @Positive long setId, MultipartHttpServletRequest request)
@@ -39,6 +51,10 @@ public class QuestionImageController {
     }
   }
 
+  @ApiResponse(responseCode = "200", description = "Image binary", content = {
+      @Content(mediaType = MediaType.IMAGE_JPEG_VALUE, schema = @Schema(type = "string", format = "binary")),
+      @Content(mediaType = MediaType.IMAGE_PNG_VALUE, schema = @Schema(type = "string", format = "binary"))
+  })
   @GetMapping("/questions/{questionId}/image")
   public ResponseEntity<byte[]> image(@PathVariable @Positive long setId, @PathVariable @Positive long questionId) {
     var download = images.download(setId, questionId, auth.requireUser().id());
