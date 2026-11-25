@@ -72,6 +72,14 @@ class GcsImageStorageTest {
     storage.save(key, "image/png", new byte[] {1});
   }
 
+  @Test
+  void treatsAMissingUploadBucketAsStorageFailure() {
+    when(sdk.create(any(BlobInfo.class), any(byte[].class), eq(Storage.BlobTargetOption.doesNotExist())))
+        .thenThrow(new StorageException(404, "missing bucket"));
+    assertThatThrownBy(() -> storage.save(key, "image/png", new byte[] {1}))
+        .isInstanceOfSatisfying(ImageStorageException.class, e -> assertThat(e.reason()).isEqualTo(Reason.IO));
+  }
+
   @ParameterizedTest
   @CsvSource({"401,AUTHENTICATION", "403,PERMISSION", "408,UNAVAILABLE", "503,UNAVAILABLE", "0,UNAVAILABLE"})
   void mapsSdkFailuresWithoutExposingProviderMessages(int code, Reason reason) {

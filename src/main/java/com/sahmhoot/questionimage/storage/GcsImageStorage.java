@@ -75,7 +75,7 @@ public final class GcsImageStorage implements ImageStorage {
         throw new ImageStorageException(Reason.UNAVAILABLE);
       }
     } catch (StorageException e) {
-      throw failure(e, Reason.IO);
+      throw failure(e, Reason.MISSING);
     }
   }
 
@@ -97,13 +97,13 @@ public final class GcsImageStorage implements ImageStorage {
     return BlobId.of(bucket, "question-images/" + key);
   }
 
-  private ImageStorageException failure(StorageException error, Reason fallback) {
+  private ImageStorageException failure(StorageException error, Reason notFound) {
     return new ImageStorageException(switch (error.getCode()) {
       case 401 -> Reason.AUTHENTICATION;
       case 403 -> Reason.PERMISSION;
-      case 404 -> Reason.MISSING;
+      case 404 -> notFound;
       case 0, 408, 429, 500, 502, 503, 504 -> Reason.UNAVAILABLE;
-      default -> fallback;
+      default -> Reason.IO;
     });
   }
 }
