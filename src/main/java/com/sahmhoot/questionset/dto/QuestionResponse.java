@@ -15,7 +15,7 @@ import java.util.List;
 public record QuestionResponse(Long id, int orderNo, QuestionType type, String content,
     int timeLimitSeconds, List<ChoiceResponse> choices, @JsonIgnore boolean imagesEnabled,
     @JsonIgnore Image image) {
-  @Schema(name = "QuestionImage", nullable = true, types = {"object", "null"}, description = "Omitted when question images are disabled.")
+  @Schema(name = "QuestionImage", description = "Omitted when question images are disabled.")
   public record Image(String url, String mimeType, int width, int height) {}
 
   public QuestionResponse(Long id, int orderNo, QuestionType type, String content, int timeLimitSeconds,
