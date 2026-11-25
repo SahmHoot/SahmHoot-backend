@@ -41,7 +41,8 @@ class QuestionImageMysqlIntegrationTest {
   @BeforeAll
   static void upgradeV2WithExistingQuestionsAndRunHistory() {
     var source = new DriverManagerDataSource(System.getenv("IMAGE_MIGRATION_DB_URL"),
-        System.getenv("DB_USERNAME"), System.getenv("DB_PASSWORD"));
+        System.getenv().getOrDefault("IMAGE_MIGRATION_DB_USERNAME", System.getenv("DB_USERNAME")),
+        System.getenv().getOrDefault("IMAGE_MIGRATION_DB_PASSWORD", System.getenv("DB_PASSWORD")));
     jdbc = new JdbcTemplate(source);
     var manager = new DataSourceTransactionManager(source);
     repository = new JdbcQuestionImageLifecycleRepository(jdbc, manager);
