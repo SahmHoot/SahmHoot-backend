@@ -2,6 +2,7 @@ package com.sahmhoot.questionimage.service;
 
 import com.sahmhoot.questionimage.storage.ImageStorage;
 import java.time.Clock;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -16,8 +17,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 class QuestionImageLifecycleConfiguration {
   @Bean
   QuestionImageLifecycle questionImageLifecycle(QuestionImageValidator validator,
-      QuestionImageLifecycleRepository repository, ImageStorage storage) {
-    return new QuestionImageLifecycle(validator, repository, storage, Clock.systemUTC());
+      QuestionImageLifecycleRepository repository, ImageStorage storage,
+      @Value("${spring.datasource.hikari.maximum-pool-size:10}") int poolSize) {
+    // Keep capacity for ordinary requests, even with a small application pool.
+    int maxStorageMutations = Math.clamp(poolSize - 1, 0, 2);
+    return new QuestionImageLifecycle(validator, repository, storage, Clock.systemUTC(), maxStorageMutations);
   }
 
   @Bean
