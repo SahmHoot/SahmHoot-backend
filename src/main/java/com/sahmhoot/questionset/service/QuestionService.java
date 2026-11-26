@@ -89,7 +89,9 @@ public class QuestionService {
   private void changeImage(long setId, long userId, long questionId, QuestionWriteRequest request) {
     var ref = request.imageRef();
     if (!images.enabled()) {
-      if (ref != null) throw new QuestionSetException(QuestionSetErrorCode.VALIDATION_FAILED);
+      if (ref != null && !ref.isNull()) {
+        throw new QuestionSetException(QuestionSetErrorCode.VALIDATION_FAILED);
+      }
       return;
     }
     if (ref != null) {

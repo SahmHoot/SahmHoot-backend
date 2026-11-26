@@ -2,7 +2,10 @@ package com.sahmhoot.questionimage.service;
 
 import static com.sahmhoot.questionimage.storage.ImageStorage.MAX_BYTES;
 
+import java.awt.AlphaComposite;
+import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.awt.image.IndexColorModel;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -21,6 +24,7 @@ import org.springframework.stereotype.Component;
 public class QuestionImageValidator {
   private static final byte[] PNG_SIGNATURE = {(byte) 137, 80, 78, 71, 13, 10, 26, 10};
   private static final int PNG_END = 0x49454e44;
+  private static final int MAX_STORED_EDGE = 1920;
 
   public record ValidatedImage(UUID key, String mimeType, int width, int height, byte[] content) {}
 
@@ -58,10 +62,13 @@ public class QuestionImageValidator {
         throw new InvalidImageException(InvalidImageException.Reason.DIMENSIONS);
       }
       BufferedImage decoded = reader.read(0);
-      // Encode only pixels. Keep PNG's original raster and palette to avoid expanding compact images.
-      BufferedImage clean = png ? decoded : JpegExifOrientation.apply(decoded, input);
-      if (clean != decoded) {
+      BufferedImage oriented = png ? decoded : JpegExifOrientation.apply(decoded, input);
+      if (oriented != decoded) {
         decoded.flush();
+      }
+      BufferedImage clean = downscale(oriented);
+      if (clean != oriented) {
+        oriented.flush();
       }
       var encoded = new BoundedImageOutput();
       try (var output = new MemoryCacheImageOutputStream(encoded)) {
@@ -79,6 +86,30 @@ public class QuestionImageValidator {
     } finally {
       reader.dispose();
     }
+  }
+
+  private BufferedImage downscale(BufferedImage source) {
+    int longestEdge = Math.max(source.getWidth(), source.getHeight());
+    if (longestEdge <= MAX_STORED_EDGE) {
+      return source;
+    }
+    double scale = (double) MAX_STORED_EDGE / longestEdge;
+    int width = Math.max(1, (int) Math.round(source.getWidth() * scale));
+    int height = Math.max(1, (int) Math.round(source.getHeight() * scale));
+    // Retain the PNG color model so grayscale and indexed images stay compact.
+    var model = source.getColorModel();
+    var resized = new BufferedImage(model, model.createCompatibleWritableRaster(width, height),
+        model.isAlphaPremultiplied(), null);
+    var graphics = resized.createGraphics();
+    try {
+      graphics.setComposite(AlphaComposite.Src);
+      graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, model instanceof IndexColorModel
+          ? RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR : RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+      graphics.drawImage(source, 0, 0, width, height, null);
+    } finally {
+      graphics.dispose();
+    }
+    return resized;
   }
 
   private byte[] sanitizePng(byte[] input) {

@@ -14,7 +14,8 @@ public record QuestionWriteRequest(@NotNull QuestionType type,
     @Min(10) @Max(300) Integer timeLimitSeconds,
     @NotNull List<@NotNull @Valid ChoiceRequest> choices,
     @Schema(type = "string", format = "uuid", nullable = true,
-        description = "Omit to preserve the current attachment on update. Set null to remove it.") JsonNode imageRef) {
+        description = "Omit to preserve the current attachment on update. Set null to remove it when images are enabled. "
+            + "When disabled, null preserves the attachment and non-null values are rejected.") JsonNode imageRef) {
   public QuestionWriteRequest(QuestionType type, String content, Integer timeLimitSeconds, List<ChoiceRequest> choices) {
     this(type, content, timeLimitSeconds, choices, null);
   }

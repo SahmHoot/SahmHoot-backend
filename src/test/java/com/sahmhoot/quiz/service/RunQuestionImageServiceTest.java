@@ -71,8 +71,48 @@ class RunQuestionImageServiceTest {
         .andExpect(status().isOk()).andExpect(content().bytes(bytes))
         .andExpect(content().contentType("image/png"))
         .andExpect(header().string("Content-Length", "3"))
-        .andExpect(header().string("Cache-Control", "no-store, private"))
+        .andExpect(header().string("Cache-Control", "no-cache, private"))
+        .andExpect(header().string("Vary", "Authorization"))
+        .andExpect(header().exists("ETag"))
         .andExpect(header().string("X-Content-Type-Options", "nosniff"));
+  }
+
+  @Test
+  void revalidatesCachedImageAgainstCurrentAccessAndContent() throws Exception {
+    when(questions.findFirstByQuizRunIdAndStatus(2L, RunQuestionStatus.OPEN))
+        .thenReturn(Optional.of(RunQuestion.builder().id(3L).build()));
+    when(images.runImages(2L, 3L)).thenReturn(Map.of(3L, new Metadata(KEY, "image/png", 1, 1)));
+    when(images.read(KEY)).thenReturn(new byte[] {1, 2, 3});
+    String tag = mvc.perform(get(URL).principal(() -> "5"))
+        .andExpect(status().isOk()).andReturn().getResponse().getHeader("ETag");
+
+    mvc.perform(get(URL).principal(() -> "5").header("If-None-Match", tag))
+        .andExpect(status().isNotModified()).andExpect(content().bytes(new byte[0]))
+        .andExpect(header().string("Cache-Control", "no-cache, private"))
+        .andExpect(header().string("Vary", "Authorization"))
+        .andExpect(header().string("ETag", tag));
+    mvc.perform(get(URL).principal(() -> "5").header("If-None-Match", "\"stale\""))
+        .andExpect(status().isOk()).andExpect(content().bytes(new byte[] {1, 2, 3}));
+    mvc.perform(get(URL).principal(() -> "7").header("If-None-Match", tag))
+        .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("NOT_PARTICIPANT"))
+        .andExpect(header().doesNotExist("ETag"));
+
+    when(questions.findFirstByQuizRunIdAndStatus(2L, RunQuestionStatus.OPEN))
+        .thenReturn(Optional.of(RunQuestion.builder().id(9L).build()));
+    mvc.perform(get(URL).principal(() -> "5").header("If-None-Match", tag))
+        .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("QUESTION_IMAGE_NOT_FOUND"))
+        .andExpect(header().doesNotExist("ETag"));
+
+    when(runs.findTopByRoomIdOrderByIdDesc(1L))
+        .thenReturn(Optional.of(QuizRun.builder().id(2L).status(QuizRunStatus.FINISHED).build()));
+    mvc.perform(get(URL).principal(() -> "5").header("If-None-Match", tag))
+        .andExpect(status().isNotModified());
+
+    when(rooms.findRoom(1L)).thenReturn(Optional.of(new RoomSnapshot(1L, 5L, RoomStatus.OPEN)));
+    mvc.perform(get(URL).principal(() -> "5").header("If-None-Match", tag))
+        .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("QUIZ_RUN_NOT_FOUND"))
+        .andExpect(header().doesNotExist("ETag"));
+    verify(images, times(4)).read(KEY);
   }
 
   @Test

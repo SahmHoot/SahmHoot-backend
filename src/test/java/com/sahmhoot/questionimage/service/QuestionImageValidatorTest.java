@@ -51,19 +51,42 @@ class QuestionImageValidatorTest {
       original = new BufferedImage(2000, 2000, BufferedImage.TYPE_BYTE_GRAY);
     }
     new Random(130).nextBytes(((DataBufferByte) original.getRaster().getDataBuffer()).getData());
-    original.getRaster().setSample(0, 0, 0, 0);
+    for (int y = 0; y < 12; y++) {
+      for (int x = 0; x < 20; x++) {
+        original.getRaster().setSample(x, y, 0, x < 6 ? 0 : 15);
+      }
+    }
     byte[] input = encode(original, "png");
     assertThat(input.length).isBetween(3 * 1024 * 1024, MAX_BYTES);
 
     var result = validator.validate(new ByteArrayInputStream(input), "image/png");
     var saved = ImageIO.read(new ByteArrayInputStream(result.content()));
-    assertThat(result.width()).isEqualTo(original.getWidth());
-    assertThat(result.height()).isEqualTo(original.getHeight());
+    assertThat(result.width()).isEqualTo(1920);
+    assertThat(result.height()).isEqualTo(1920);
+    assertThat(saved.getWidth()).isEqualTo(result.width());
+    assertThat(saved.getHeight()).isEqualTo(result.height());
     assertThat(result.content().length).isLessThanOrEqualTo(MAX_BYTES);
     assertThat(saved.getColorModel().hasAlpha()).isEqualTo(indexed);
     assertThat(saved.getRaster().getNumBands()).isEqualTo(1);
     assertThat(saved.getRGB(0, 0)).isEqualTo(original.getRGB(0, 0));
-    assertThat(saved.getRGB(121, 130)).isEqualTo(original.getRGB(121, 130));
+    assertThat(saved.getRGB(7, 2)).isEqualTo(original.getRGB(8, 2));
+  }
+
+  @Test
+  void downscalesTransparentLandscapePngWithoutLosingAlpha() throws Exception {
+    var original = new BufferedImage(2400, 1200, BufferedImage.TYPE_INT_ARGB);
+    var graphics = original.createGraphics();
+    graphics.setColor(new Color(11, 22, 33, 128));
+    graphics.fillRect(100, 100, 100, 100);
+    graphics.dispose();
+    var result = validator.validate(new ByteArrayInputStream(encode(original, "png")), "image/png");
+    var saved = ImageIO.read(new ByteArrayInputStream(result.content()));
+    assertThat(result.width()).isEqualTo(1920);
+    assertThat(result.height()).isEqualTo(960);
+    assertThat(saved.getWidth()).isEqualTo(result.width());
+    assertThat(saved.getHeight()).isEqualTo(result.height());
+    assertThat(saved.getRGB(10, 10)).isZero();
+    assertThat(saved.getRGB(100, 100) >>> 24).isEqualTo(128);
   }
 
   @Test
@@ -93,12 +116,16 @@ class QuestionImageValidatorTest {
   @ParameterizedTest
   @ValueSource(ints = {1, 2, 3, 4, 5, 6, 7, 8})
   void appliesExifOrientationToPixels(int orientation) throws Exception {
-    var original = new BufferedImage(96, 64, BufferedImage.TYPE_INT_RGB);
+    int inputWidth = orientation == 6 ? 2400 : 96;
+    int inputHeight = orientation == 6 ? 1600 : 64;
+    var original = new BufferedImage(inputWidth, inputHeight, BufferedImage.TYPE_INT_RGB);
+    int halfWidth = inputWidth / 2;
+    int halfHeight = inputHeight / 2;
     Color[] colors = {Color.RED, Color.GREEN, Color.BLUE, Color.YELLOW};
     var g = original.createGraphics();
     for (int i = 0; i < colors.length; i++) {
       g.setColor(colors[i]);
-      g.fillRect(i % 2 * 48, i / 2 * 32, 48, 32);
+      g.fillRect(i % 2 * halfWidth, i / 2 * halfHeight, halfWidth, halfHeight);
     }
     g.dispose();
     var order = orientation % 2 == 0 ? ByteOrder.BIG_ENDIAN : ByteOrder.LITTLE_ENDIAN;
@@ -115,8 +142,8 @@ class QuestionImageValidatorTest {
       case 8 -> new int[] {1, 3, 0, 2};
       default -> new int[] {0, 1, 2, 3};
     };
-    int width = orientation >= 5 ? 64 : 96;
-    int height = orientation >= 5 ? 96 : 64;
+    int width = orientation == 6 ? 1280 : orientation >= 5 ? 64 : 96;
+    int height = orientation == 6 ? 1920 : orientation >= 5 ? 96 : 64;
     assertThat(result.width()).isEqualTo(width);
     assertThat(result.height()).isEqualTo(height);
     assertThat(saved.getWidth()).isEqualTo(width);
@@ -180,9 +207,14 @@ class QuestionImageValidatorTest {
   @Test
   void acceptsDimensionAndPixelLimits() throws Exception {
     var edge = validator.validate(new ByteArrayInputStream(image("png", 4096, 1)), "image/png");
-    assertThat(edge.width()).isEqualTo(4096);
+    assertThat(edge.width()).isEqualTo(1920);
+    assertThat(edge.height()).isEqualTo(1);
     var area = validator.validate(new ByteArrayInputStream(image("png", 4000, 4000)), "image/png");
-    assertThat((long) area.width() * area.height()).isEqualTo(16_000_000);
+    assertThat(area.width()).isEqualTo(1920);
+    assertThat(area.height()).isEqualTo(1920);
+    var storedEdge = validator.validate(new ByteArrayInputStream(image("png", 960, 1920)), "image/png");
+    assertThat(storedEdge.width()).isEqualTo(960);
+    assertThat(storedEdge.height()).isEqualTo(1920);
   }
 
   @Test
