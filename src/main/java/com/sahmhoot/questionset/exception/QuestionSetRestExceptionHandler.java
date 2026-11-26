@@ -2,6 +2,7 @@ package com.sahmhoot.questionset.exception;
 
 import com.sahmhoot.questionset.controller.QuestionSetController;
 import com.sahmhoot.questionset.controller.QuestionController;
+import com.sahmhoot.questionset.controller.QuestionImageController;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -13,11 +14,11 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import org.springframework.validation.method.ParameterErrors;
 
 @Slf4j
-@RestControllerAdvice(assignableTypes = {QuestionSetController.class, QuestionController.class})
+@RestControllerAdvice(assignableTypes = {QuestionSetController.class, QuestionController.class, QuestionImageController.class})
 public class QuestionSetRestExceptionHandler {
   @ExceptionHandler(QuestionSetException.class)
   public ResponseEntity<QuestionSetErrorResponse> business(QuestionSetException error) {
-    return response(error.getCode(), null);
+    return response(error.getCode(), error.getFieldErrors());
   }
 
   @ExceptionHandler(MethodArgumentNotValidException.class)

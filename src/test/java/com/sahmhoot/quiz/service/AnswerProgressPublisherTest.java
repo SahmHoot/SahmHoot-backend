@@ -128,7 +128,7 @@ class AnswerProgressPublisherTest {
   private static List<QuizMessage> transitions() {
     return List.of(
         QuestionOpenedMessage.of(77L, 813L, 2, 2, QuestionType.TRUE_FALSE, "다음 문항", 60,
-            T0.plusSeconds(60), List.of(), T0),
+            T0.plusSeconds(60), List.of(), T0, null),
         QuizFinishedMessage.of(77L, new QuizResultResponse(List.of()), T0),
         QuizCanceledMessage.of(77L, T0),
         RoomWaitingMessage.of(T0));

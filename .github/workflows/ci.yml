@@ -51,6 +51,21 @@ jobs:
           --health-timeout=5s
           --health-retries=20
 
+      image-mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: image_migration_test
+          MYSQL_USER: image_migration
+          MYSQL_PASSWORD: image-ci-only
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306/tcp
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
     steps:
       - uses: actions/checkout@v7
 
@@ -63,10 +78,27 @@ jobs:
 
       - name: 빌드·테스트
         env:
+          TEST_DB_URL: jdbc:mysql://127.0.0.1:3306/sahmhoot_test?characterEncoding=UTF-8&connectionTimeZone=UTC
+          IMAGE_MIGRATION_DB_URL: jdbc:mysql://127.0.0.1:${{ job.services.image-mysql.ports[3306] }}/image_migration_test?characterEncoding=UTF-8&connectionTimeZone=UTC
+          IMAGE_MIGRATION_DB_USERNAME: image_migration
+          IMAGE_MIGRATION_DB_PASSWORD: image-ci-only
           CHAT_MIGRATION_DB_URL: jdbc:mysql://127.0.0.1:${{ job.services.chat-mysql.ports[3306] }}/chat_migration_test?characterEncoding=UTF-8&connectionTimeZone=UTC
           CHAT_MIGRATION_DB_USERNAME: root
           CHAT_MIGRATION_DB_PASSWORD: ''
-        run: ./gradlew build
+        run: |
+          ./gradlew build
+          python3 - <<'PY'
+          from xml.etree.ElementTree import parse
+          for suite, minimum in {
+              "com.sahmhoot.chat.ChatMigrationIntegrationTest": 21,
+              "com.sahmhoot.questionimage.repository.QuestionImageMysqlIntegrationTest": 5,
+          }.items():
+              report = parse(f"build/test-results/test/TEST-{suite}.xml").getroot()
+              tests, skipped = int(report.attrib["tests"]), int(report.attrib["skipped"])
+              print(f"{suite}: {tests} tests, {skipped} skipped")
+              if tests < minimum or skipped:
+                  raise SystemExit(f"Required migration tests did not run: {suite}")
+          PY
 
       # 실패했을 때만 원인을 볼 수 있게 테스트 리포트를 남긴다
       - name: 테스트 리포트 업로드

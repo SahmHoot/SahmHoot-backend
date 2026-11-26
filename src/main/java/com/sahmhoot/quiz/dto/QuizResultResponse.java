@@ -1,5 +1,7 @@
 package com.sahmhoot.quiz.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.sahmhoot.questionimage.dto.RunQuestionImage;
 import java.util.List;
 
 /**
@@ -18,7 +20,8 @@ public record QuizResultResponse(
       int answeredCount,
       int correctCount,
       int incorrectCount,
-      List<ChoiceResultDetail> choices
+      List<ChoiceResultDetail> choices,
+      @JsonInclude(value = JsonInclude.Include.CUSTOM, valueFilter = RunQuestionImage.DisabledFilter.class) RunQuestionImage image
   ) {}
 
   public record ChoiceResultDetail(

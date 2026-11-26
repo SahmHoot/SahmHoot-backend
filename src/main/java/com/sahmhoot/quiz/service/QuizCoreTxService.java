@@ -34,6 +34,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -55,11 +56,12 @@ public class QuizCoreTxService {
   private final ApplicationEventPublisher eventPublisher;
   /** 현재 시각을 읽는 시계. 운영은 진짜 UTC 시계, 테스트는 가짜 시계가 들어온다({@code QuizClockConfig}). */
   private final Clock clock;
+  private final RunQuestionImageService images;
 
   /**
    * 퀴즈 시작 트랜잭션.
    */
-  @Transactional
+  @Transactional(isolation = Isolation.READ_COMMITTED)
   public StartQuizResponse startQuiz(Long roomId, StartQuizRequest request, Long hostUserId) {
     RoomSnapshot room = getRoomOwnedBy(roomId, hostUserId);
     if (room.status() == RoomStatus.CLOSED) {
@@ -69,6 +71,8 @@ public class QuizCoreTxService {
       throw new BusinessException(ErrorCode.QUIZ_ALREADY_RUNNING);
     }
 
+    // Lock the source before inserting the run, which takes a foreign-key lock on the set.
+    questionSetPort.lockForQuizStart(request.questionSetId());
     validateQuestionSetOwner(request.questionSetId(), hostUserId);
     QuizRun quizRun = createQuizRun(roomId, request.questionSetId());
     roomPort.updateStatus(roomId, RoomStatus.PLAYING);
@@ -320,7 +324,8 @@ public class QuizCoreTxService {
         .toList();
     QuestionOpenedMessage message = QuestionOpenedMessage.of(
         quizRun.getId(), question.getId(), questionNo, totalQuestions, question.getType(), question.getContent(),
-        question.getTimeLimitSeconds(), question.getClosesAt(), choices, Instant.now(clock));
+        question.getTimeLimitSeconds(), question.getClosesAt(), choices, Instant.now(clock),
+        images.currentImage(quizRun.getRoomId(), quizRun.getId(), question.getId()));
     eventPublisher.publishEvent(new QuizStateChangedEvent(quizRun.getRoomId(), message));
   }
 

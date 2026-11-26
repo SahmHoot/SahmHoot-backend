@@ -32,6 +32,7 @@ public class RoomQuizStateAdapter implements RoomQuizStatePort {
   private final RoomPort rooms;
   private final QuizResultService results;
   private final QuizFeedbackState feedback;
+  private final RunQuestionImageService images;
 
   @Override
   @Transactional(propagation = Propagation.MANDATORY, readOnly = true)
@@ -54,11 +55,9 @@ public class RoomQuizStateAdapter implements RoomQuizStatePort {
       return new Snapshot(status, new Quiz(run.getId(), title, allQuestions.size(), Phase.RESULT,
           null, null, myAnswers, result(run.getId())), null);
     }
-    var open = allQuestions.stream().filter(RunQuestion::isOpen).findFirst();
-    Phase phase = open.isPresent() ? Phase.QUESTION : Phase.FEEDBACK;
-    RunQuestion current = open.orElseGet(() -> allQuestions.reversed().stream()
-        .filter(RunQuestion::isClosed).findFirst()
-        .orElseThrow(() -> new IllegalStateException("진행 중인 회차에 현재 문항이 없습니다.")));
+    RunQuestion current = RunQuestionImageService.currentQuestion(allQuestions);
+    if (current == null) throw new IllegalStateException("Running quiz has no current question");
+    Phase phase = current.isOpen() ? Phase.QUESTION : Phase.FEEDBACK;
     List<RunChoice> currentChoices = choices.findByRunQuestionIdOrderByOrderNoAsc(current.getId());
     Long correctChoiceId = phase == Phase.FEEDBACK ? currentChoices.stream().filter(RunChoice::isCorrect)
         .map(RunChoice::getId).findFirst().orElseThrow() : null;
@@ -68,7 +67,8 @@ public class RoomQuizStateAdapter implements RoomQuizStatePort {
     var question = new CurrentQuestion(current.getId(), allQuestions.indexOf(current) + 1,
         current.getType().name(), current.getTimeLimitSeconds(), current.getContent(),
         currentChoices.stream().map(choice -> new Choice(choice.getId(), choice.getOrderNo(), choice.getContent())).toList(),
-        current.getOpenedAt(), current.getClosesAt(), current.getClosedAt(), correctChoiceId);
+        current.getOpenedAt(), current.getClosesAt(), current.getClosedAt(), correctChoiceId,
+        images.currentImage(roomId, run.getId(), current.getId()));
     var progress = phase == Phase.QUESTION
         ? new Progress(current.getId(), Math.toIntExact(answers.countByRunQuestionId(current.getId()))) : null;
     return new Snapshot(status, new Quiz(run.getId(), title, allQuestions.size(), phase,
@@ -80,6 +80,6 @@ public class RoomQuizStateAdapter implements RoomQuizStatePort {
         question.runQuestionId(), question.questionNo(), question.content(), question.correctChoiceId(),
         question.answeredCount(), question.correctCount(), question.incorrectCount(),
         question.choices().stream().map(choice -> new ChoiceResult(
-            choice.id(), choice.orderNo(), choice.content(), choice.count())).toList())).toList());
+            choice.id(), choice.orderNo(), choice.content(), choice.count())).toList(), question.image())).toList());
   }
 }

@@ -4,6 +4,7 @@ import com.sahmhoot.questionset.dto.*;
 import com.sahmhoot.questionset.entity.*;
 import com.sahmhoot.questionset.exception.*;
 import com.sahmhoot.questionset.repository.*;
+import com.sahmhoot.questionset.service.port.QuestionImageAccess;
 import java.util.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -15,6 +16,7 @@ public class QuestionService {
   private final QuestionSetRepository sets;
   private final QuestionRepository questions;
   private final ChoiceRepository choices;
+  private final QuestionImageAccess images;
 
   @Transactional
   public QuestionResponse add(Long setId, Long userId, QuestionWriteRequest request) {
@@ -23,21 +25,23 @@ public class QuestionService {
     int order = existing.isEmpty() ? 1 : Math.addExact(existing.getLast().getOrderNo(), 1);
     Question q = questions.saveAndFlush(new Question(set, request.type(), request.content(),
         request.secondsOrDefault(), order));
+    changeImage(setId, userId, q.getId(), request);
     var response = replaceChoices(q, request);
     set.touch();
-    return response;
+    return withImage(setId, response);
   }
 
   @Transactional
   public QuestionResponse update(Long setId, Long questionId, Long userId, QuestionWriteRequest request) {
     QuestionSet set = owned(setId, userId, QuestionSetErrorCode.QUESTION_NOT_FOUND);
     Question q = question(setId, questionId);
+    changeImage(setId, userId, questionId, request);
     q.update(request.type(), request.content(), request.secondsOrDefault());
     choices.deleteForQuestion(questionId);
     choices.flush();
     var response = replaceChoices(q, request);
     set.touch();
-    return response;
+    return withImage(setId, response);
   }
 
   @Transactional
@@ -80,6 +84,38 @@ public class QuestionService {
     for (int i = 0; i < ids.size(); i++) byId.get(ids.get(i)).reorder(i + 1);
     questions.flush();
     set.touch();
+  }
+
+  private void changeImage(long setId, long userId, long questionId, QuestionWriteRequest request) {
+    var ref = request.imageRef();
+    if (!images.enabled()) {
+      if (ref != null && !ref.isNull()) {
+        throw new QuestionSetException(QuestionSetErrorCode.VALIDATION_FAILED);
+      }
+      return;
+    }
+    if (ref != null) {
+      if (ref.isNull()) {
+        images.detach(setId, questionId);
+      } else {
+        UUID key;
+        try {
+          key = UUID.fromString(ref.asString(""));
+          if (!key.toString().equals(ref.asString(""))) throw new IllegalArgumentException();
+        } catch (IllegalArgumentException e) {
+          throw new QuestionSetException(QuestionSetErrorCode.VALIDATION_FAILED);
+        }
+        try {
+          images.attach(key, userId, setId, questionId);
+        } catch (QuestionImageAccess.ImageAccessException e) {
+          throw QuestionImageService.translate(e);
+        }
+      }
+    }
+  }
+
+  private QuestionResponse withImage(long setId, QuestionResponse response) {
+    return images.enabled() ? response.withImage(setId, images.image(setId, response.id())) : response;
   }
 
   private QuestionSet owned(Long setId, Long userId, QuestionSetErrorCode notFoundCode) {

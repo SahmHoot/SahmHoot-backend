@@ -1,6 +1,7 @@
 package com.sahmhoot.quiz.exception;
 
 import com.sahmhoot.quiz.controller.QuizRunController;
+import com.sahmhoot.quiz.controller.RunQuestionImageController;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -13,7 +14,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * 팀 공통 예외 정책이 정해지면 공통 처리기로 교체한다.
  */
 @Slf4j
-@RestControllerAdvice(assignableTypes = QuizRunController.class)
+@RestControllerAdvice(assignableTypes = {QuizRunController.class, RunQuestionImageController.class})
 public class QuizRestExceptionHandler {
 
   @ExceptionHandler(BusinessException.class)

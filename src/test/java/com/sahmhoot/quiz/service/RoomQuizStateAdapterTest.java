@@ -30,7 +30,7 @@ class RoomQuizStateAdapterTest {
   private final QuizResultService results = mock(QuizResultService.class);
   private final QuizFeedbackState feedback = new QuizFeedbackState();
   private final RoomQuizStateAdapter adapter = new RoomQuizStateAdapter(
-      runs, questions, choices, answers, sets, rooms, results, feedback);
+      runs, questions, choices, answers, sets, rooms, results, feedback, mock(RunQuestionImageService.class));
   private QuizRun run;
   private RunQuestion first;
   private RunQuestion second;
@@ -93,7 +93,7 @@ class RoomQuizStateAdapterTest {
     run.finish(NOW);
     when(results.aggregateResult(77L)).thenReturn(new QuizResultResponse(List.of(
         new QuizResultResponse.QuestionResultDetail(812L, 2, "둘째 문항", 3001L, 2, 1, 1,
-            List.of(new QuizResultResponse.ChoiceResultDetail(3001L, 1, "정답", 1))))));
+            List.of(new QuizResultResponse.ChoiceResultDetail(3001L, 1, "정답", 1)), null))));
     var state = adapter.read(42L, 900L);
     assertThat(state.quiz().phase()).isEqualTo(Phase.RESULT);
     assertThat(state.quiz().result().questions().getFirst().choices().getFirst().count()).isEqualTo(1);

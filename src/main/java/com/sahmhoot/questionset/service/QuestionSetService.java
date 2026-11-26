@@ -8,8 +8,10 @@ import com.sahmhoot.questionset.repository.*;
 import java.util.*;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import com.sahmhoot.questionset.service.port.QuestionImageAccess;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -19,6 +21,7 @@ public class QuestionSetService {
   private final QuestionRepository questions;
   private final ChoiceRepository choices;
   private final QuestionSetQueryRepository query;
+  private final QuestionImageAccess images;
 
   @Transactional(readOnly = true)
   public PublicQuestionSetPageResponse publicSets(int page, int size) {
@@ -44,19 +47,20 @@ public class QuestionSetService {
 
   @Transactional(readOnly = true)
   public QuestionSetDetailResponse detail(Long setId, Long userId) {
-    QuestionSet set = sets.findById(setId)
-        .orElseThrow(() -> new QuestionSetException(QuestionSetErrorCode.QUESTION_SET_NOT_FOUND));
-    if (!set.getHostId().equals(userId) && set.getVisibility() != Visibility.PUBLIC) {
-      throw new QuestionSetException(QuestionSetErrorCode.FORBIDDEN);
-    }
+    QuestionSet set = readableSet(setId, userId);
     var all = questions.findByQuestionSetIdOrderByOrderNoAsc(setId);
     Map<Long, List<ChoiceResponse>> byQuestion = all.isEmpty() ? Map.of()
         : choices.findByQuestionIdInOrderByOrderNoAsc(all.stream().map(Question::getId).toList())
             .stream().collect(Collectors.groupingBy(c -> c.getQuestion().getId(),
                 Collectors.mapping(ChoiceResponse::from, Collectors.toList())));
+    boolean imagesEnabled = images.enabled();
+    var metadata = imagesEnabled ? images.images(setId) : Map.<Long, QuestionImageAccess.Metadata>of();
     return new QuestionSetDetailResponse(set.getId(), set.getTitle(), set.getVisibility(),
         set.getDescription(), query.ownerName(set.getHostId()), all.stream()
-            .map(q -> QuestionResponse.from(q, byQuestion.getOrDefault(q.getId(), List.of()))).toList());
+            .map(q -> {
+              var response = QuestionResponse.from(q, byQuestion.getOrDefault(q.getId(), List.of()));
+              return imagesEnabled ? response.withImage(setId, metadata.get(q.getId())) : response;
+            }).toList());
   }
 
   @Transactional
@@ -87,6 +91,26 @@ public class QuestionSetService {
       }
       throw e;
     }
+  }
+
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+  public QuestionImageAccess.Metadata readableImage(long setId, long questionId, long userId) {
+    readableSet(setId, userId);
+    var metadata = images.image(setId, questionId);
+    if (metadata != null) return metadata;
+    if (questions.findByIdAndQuestionSetId(questionId, setId).isEmpty()) {
+      throw new QuestionSetException(QuestionSetErrorCode.QUESTION_NOT_FOUND);
+    }
+    throw new QuestionSetException(QuestionSetErrorCode.QUESTION_IMAGE_NOT_FOUND);
+  }
+
+  QuestionSet readableSet(Long setId, Long userId) {
+    QuestionSet set = sets.findById(setId)
+        .orElseThrow(() -> new QuestionSetException(QuestionSetErrorCode.QUESTION_SET_NOT_FOUND));
+    if (!set.getHostId().equals(userId) && set.getVisibility() != Visibility.PUBLIC) {
+      throw new QuestionSetException(QuestionSetErrorCode.FORBIDDEN);
+    }
+    return set;
   }
 
   private QuestionSet owned(Long id, Long userId) {
