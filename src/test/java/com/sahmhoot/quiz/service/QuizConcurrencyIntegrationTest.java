@@ -18,6 +18,9 @@ import com.sahmhoot.quiz.dto.StartQuizRequest;
 import com.sahmhoot.quiz.dto.StartQuizResponse;
 import com.sahmhoot.quiz.dto.SubmitAnswerRequest;
 import com.sahmhoot.quiz.dto.message.QuestionClosedMessage;
+import com.sahmhoot.quiz.dto.message.QuizCanceledMessage;
+import com.sahmhoot.quiz.exception.BusinessException;
+import com.sahmhoot.quiz.exception.ErrorCode;
 import com.sahmhoot.quiz.repository.RunChoiceRepository;
 import com.sahmhoot.quiz.schedule.AnswerTaskScheduler;
 import com.sahmhoot.quiz.schedule.ManualQuizTaskScheduler;
@@ -185,6 +188,37 @@ class QuizConcurrencyIntegrationTest {
     assertThat(quizMessageCount(QuestionClosedMessage.class)).isZero();
   }
 
+  @Test
+  @DisplayName("교수 중단·시간 마감·마지막 학생 답이 동시에 와도 회차는 중단으로 끝나고 마감·중단 발행이 겹치지 않으며 예약이 남지 않는다")
+  void abortDeadlineAndLastAnswerRaceEndsInOneConsistentState() throws Exception {
+    var started = startQuiz(10, 20);
+    List<Long> participants = joinStudents(2);
+    when(presence.getOnlineParticipantIds(roomId)).thenReturn(Set.copyOf(participants));
+    Long questionId = started.firstRunQuestionId();
+    Long choiceId = choiceIds(questionId).getFirst();
+    clock.setTo(T0.plusSeconds(5));
+    answerService.submitAnswer(roomId, participants.get(0), new SubmitAnswerRequest(questionId, choiceId));
+    // 답을 받는 마지막 시각(closes_at + 1초). 마감 예약이 실행되는 시각과 같다.
+    clock.setTo(T0.plusSeconds(11));
+
+    List<Throwable> errors = race(List.of(
+        () -> { quizCoreService.abortQuiz(roomId, started.runId(), professor.getId()); return null; },
+        () -> { quizCoreService.closeQuestion(roomId, questionId); return null; },
+        () -> answerService.submitAnswer(roomId, participants.get(1), new SubmitAnswerRequest(questionId, choiceId))));
+
+    // 어느 순서로 실행돼도 실패할 수 있는 것은 중단 뒤에 도착한 답(QUESTION_CLOSED)뿐이다.
+    assertThat(errors).allMatch(QuizConcurrencyIntegrationTest::isQuestionClosed);
+    assertThat(jdbc.queryForObject("SELECT status FROM quiz_runs WHERE id = ?", String.class, started.runId()))
+        .isEqualTo("ABORTED");
+    assertThat(jdbc.queryForObject("SELECT status FROM rooms WHERE id = ?", String.class, roomId)).isEqualTo("OPEN");
+    assertThat(questionStatus(questionId)).isEqualTo("CLOSED");
+    assertThat(openQuestionCount(started.runId())).isZero();
+    assertThat(quizMessageCount(QuizCanceledMessage.class)).isEqualTo(1);
+    assertThat(quizMessageCount(QuestionClosedMessage.class)).isLessThanOrEqualTo(1);
+    // 마감이 먼저 처리돼 다음 문항이 예약됐더라도 중단이 모두 취소한다.
+    assertThat(scheduler.pendingCount(roomId)).isZero();
+  }
+
   /** 작업들을 동시에 출발시키고, 끝날 때까지 기다려 던진 예외만 모아 돌려준다. */
   private List<Throwable> race(List<Callable<Object>> tasks) throws InterruptedException {
     var start = new CountDownLatch(1);
@@ -209,6 +243,10 @@ class QuizConcurrencyIntegrationTest {
       }
     }
     return errors;
+  }
+
+  private static boolean isQuestionClosed(Throwable error) {
+    return error instanceof BusinessException business && business.getErrorCode() == ErrorCode.QUESTION_CLOSED;
   }
 
   /** 주어진 제한시간(초)의 객관식 문항들로 세트를 만들고 T0에 퀴즈를 시작한다. */
